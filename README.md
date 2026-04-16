@@ -2,6 +2,10 @@
 
 `C-CLIENT-M` 是 `C-CLIENT` 的移动端监督前端，面向主管 / 调度者使用。
 
+[![CI](https://github.com/cwwlla01/C-CLIENT-M/actions/workflows/ci.yml/badge.svg)](https://github.com/cwwlla01/C-CLIENT-M/actions/workflows/ci.yml)
+
+![C-CLIENT-M Preview](./docs/assets/home-preview.png)
+
 它聚焦公司维度的移动监督能力：
 
 - 首页监督总览
@@ -42,6 +46,12 @@
 - `VITE_CCLIENT_KEY`
   当 bridge 开启 API Key 时传入
 
+可直接从示例文件开始：
+
+```bash
+cp .env.example .env.local
+```
+
 ## 本地开发
 
 ```bash
@@ -54,6 +64,19 @@ npm run dev
 ## 构建
 
 ```bash
+npm run build
+```
+
+## CI
+
+仓库已内置 GitHub Actions 工作流：
+
+- `.github/workflows/ci.yml`
+
+默认在 `push main` 和 `pull_request` 时执行：
+
+```bash
+npm ci
 npm run build
 ```
 
