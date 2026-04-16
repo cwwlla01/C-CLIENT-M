@@ -20,6 +20,7 @@
 - [C-CLIENT / docs / docker-podman.md](https://github.com/cwwlla01/C-CLIENT/blob/main/docs/docker-podman.md)
 - [C-CLIENT / docs / local-api-reference.md](https://github.com/cwwlla01/C-CLIENT/blob/main/docs/local-api-reference.md)
 - [C-CLIENT / docs / mvp-current-state.md](https://github.com/cwwlla01/C-CLIENT/blob/main/docs/mvp-current-state.md)
+- [C-CLIENT-M / docs / deployment.md](./docs/deployment.md)
 
 ## 技术栈
 
@@ -119,3 +120,7 @@ docker compose up --build
 - Docker / Podman 下的执行端运行链路
 
 这些都在 [C-CLIENT](https://github.com/cwwlla01/C-CLIENT) 中维护。
+
+## License
+
+[MIT](./LICENSE)
