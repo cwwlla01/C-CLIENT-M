@@ -9,7 +9,6 @@ import {
   type FormEvent,
 } from "react";
 import {
-  BRIDGE_HTTP_ORIGIN,
   assignTask,
   controlRuntime,
   loadEmployeeExtras,
@@ -165,7 +164,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<NavTab>("home");
   const [snapshot, setSnapshot] = useState<MobileSnapshot>(() => createEmptySnapshot());
   const [connection, setConnection] = useState<ConnectionState>(() =>
-    createConnectionState("connecting", `尝试连接 ${BRIDGE_HTTP_ORIGIN}`),
+    createConnectionState("connecting", "正在连接业务接口"),
   );
   const [refreshing, setRefreshing] = useState(true);
   const [selectedCompany, setSelectedCompany] = useState("all");
@@ -257,7 +256,7 @@ function App() {
     try {
       const liveSnapshot = await loadMobileSnapshot(signal);
       setSnapshot(liveSnapshot);
-      setConnection(createConnectionState("live", `已连接 ${BRIDGE_HTTP_ORIGIN}`));
+      setConnection(createConnectionState("live", "业务接口已连接"));
     } catch (error) {
       if (signal?.aborted) {
         return;
@@ -374,7 +373,7 @@ function App() {
     const controller = new AbortController();
     void refreshEmployeeExtras(selectedEmployee, controller.signal);
     return () => controller.abort();
-  }, [connection.mode, selectedEmployee?.id]);
+  }, [connection.mode, selectedEmployee]);
 
   useEffect(() => {
     if (selectedCompany !== "all" && !snapshot.companies.includes(selectedCompany)) {

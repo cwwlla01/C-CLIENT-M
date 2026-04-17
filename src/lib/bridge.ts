@@ -9,8 +9,8 @@ import type {
   TaskRecord,
 } from "../types";
 
-const BRIDGE_HTTP_ORIGIN =
-  import.meta.env.VITE_BRIDGE_HTTP_ORIGIN?.replace(/\/+$/, "") ?? "http://127.0.0.1:4285";
+const BRIDGE_HTTP_ORIGIN = import.meta.env.VITE_BRIDGE_HTTP_ORIGIN?.trim().replace(/\/+$/, "") ?? "";
+const DEFAULT_PROJECT_ROOT = import.meta.env.VITE_PROJECT_ROOT?.trim() || "/workspace/company";
 
 const API_KEY = import.meta.env.VITE_CCLIENT_KEY?.trim() ?? "";
 
@@ -116,7 +116,7 @@ async function fetchJson<T>(path: string, init?: RequestInit, signal?: AbortSign
     headers.set("X-CClient-Key", API_KEY);
   }
 
-  const response = await fetch(`${BRIDGE_HTTP_ORIGIN}${path}`, {
+  const response = await fetch(buildBridgeUrl(path), {
     ...init,
     signal,
     headers,
@@ -157,7 +157,7 @@ function normalizeWorkStatus(value?: string): EmployeeRecord["workStatus"] {
 }
 
 async function probeBridge(signal?: AbortSignal) {
-  const response = await fetch(`${BRIDGE_HTTP_ORIGIN}/health`, {
+  const response = await fetch(buildBridgeUrl("/health"), {
     signal,
     headers: buildHealthHeaders(),
   });
@@ -170,6 +170,10 @@ async function probeBridge(signal?: AbortSignal) {
   if (!payload.ok) {
     throw new Error("bridge health is not ok");
   }
+}
+
+function buildBridgeUrl(path: string) {
+  return BRIDGE_HTTP_ORIGIN ? `${BRIDGE_HTTP_ORIGIN}${path}` : path;
 }
 
 function buildHealthHeaders() {
@@ -276,8 +280,7 @@ export async function loadMobileSnapshot(signal?: AbortSignal): Promise<MobileSn
         body: JSON.stringify({
           projectRoot:
             rootInfo.projectRoot ||
-            import.meta.env.VITE_PROJECT_ROOT ||
-            "/workspace/company",
+            DEFAULT_PROJECT_ROOT,
         }),
       },
       signal,
@@ -490,5 +493,3 @@ export async function switchEmployeeProject(employee: EmployeeRecord, targetWork
     }),
   });
 }
-
-export { BRIDGE_HTTP_ORIGIN };

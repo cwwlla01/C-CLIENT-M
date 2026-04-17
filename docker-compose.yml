@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_APP_TITLE: C-CLIENT-M
-        VITE_BRIDGE_HTTP_ORIGIN: http://127.0.0.1:4285
+        VITE_BRIDGE_HTTP_ORIGIN: ""
         VITE_PROJECT_ROOT: /workspace/company
         VITE_CCLIENT_KEY: ""
     container_name: c-client-m
@@ -13,6 +13,9 @@ services:
       HOST: 0.0.0.0
       PORT: 80
       APP_LOGIN_PASSWORD: ${APP_LOGIN_PASSWORD}
+      BRIDGE_PROXY_TARGET: ${BRIDGE_PROXY_TARGET:-http://host.docker.internal:4285}
     ports:
       - "4275:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped

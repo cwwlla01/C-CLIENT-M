@@ -1,17 +1,23 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import {
+  clearAuthCookieHeader,
+  createAuthCookieHeader,
+  getAuthConfig,
+  getBridgeProxyTarget,
+  isAuthenticatedCookieHeader,
+  passwordMatches,
+  shouldProxyBridgePath,
+} from "./server-lib/gateway.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, "dist");
 
-const cookieName = "c_client_m_auth";
-const authPassword = String(process.env.APP_LOGIN_PASSWORD || "").trim();
-const authEnabled = authPassword.length > 0;
-const authToken = authEnabled ? createHash("sha256").update(authPassword).digest("hex") : "";
+const authConfig = getAuthConfig();
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -36,38 +42,10 @@ function parseArg(name, fallback) {
 
 const host = parseArg("--host", process.env.HOST || "127.0.0.1");
 const port = Number(parseArg("--port", process.env.PORT || "80"));
-
-function parseCookies(request) {
-  const raw = request.headers.cookie || "";
-  return Object.fromEntries(
-    raw
-      .split(";")
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .map((pair) => {
-        const index = pair.indexOf("=");
-        const key = index >= 0 ? pair.slice(0, index) : pair;
-        const value = index >= 0 ? pair.slice(index + 1) : "";
-        return [key, decodeURIComponent(value)];
-      }),
-  );
-}
+const bridgeProxyTarget = getBridgeProxyTarget();
 
 function isAuthenticated(request) {
-  if (!authEnabled) {
-    return true;
-  }
-
-  const cookies = parseCookies(request);
-  const value = cookies[cookieName];
-  if (!value) {
-    return false;
-  }
-
-  const left = Buffer.from(value);
-  const right = Buffer.from(authToken);
-
-  return left.length === right.length && timingSafeEqual(left, right);
+  return isAuthenticatedCookieHeader(request.headers.cookie || "", authConfig);
 }
 
 function sendJson(response, statusCode, payload, headers = {}) {
@@ -91,12 +69,48 @@ async function readJsonBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function createAuthCookie() {
-  return `${cookieName}=${encodeURIComponent(authToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`;
+function hasRequestBody(method) {
+  return method !== "GET" && method !== "HEAD";
 }
 
-function clearAuthCookie() {
-  return `${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+async function proxyBridgeRequest(request, response, url) {
+  if (!bridgeProxyTarget) {
+    sendJson(response, 502, {
+      error: "Bridge 代理未配置，请设置 BRIDGE_PROXY_TARGET，或在反向代理上同源转发 /api 和 /health。",
+    });
+    return;
+  }
+
+  const upstreamUrl = new URL(`${url.pathname}${url.search}`, `${bridgeProxyTarget}/`);
+  const headers = new Headers(request.headers);
+  headers.delete("host");
+  headers.delete("connection");
+
+  const upstreamResponse = await fetch(upstreamUrl, {
+    method: request.method,
+    headers,
+    body: hasRequestBody(request.method || "GET") ? request : undefined,
+    duplex: hasRequestBody(request.method || "GET") ? "half" : undefined,
+    redirect: "manual",
+  });
+
+  response.writeHead(
+    upstreamResponse.status,
+    Object.fromEntries(upstreamResponse.headers.entries()),
+  );
+
+  if (!upstreamResponse.body) {
+    response.end();
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    const stream = Readable.fromWeb(upstreamResponse.body);
+    stream.on("error", reject);
+    response.on("error", reject);
+    response.on("finish", resolve);
+    stream.pipe(response);
+  });
 }
 
 async function serveStaticFile(filePath, response) {
@@ -128,7 +142,7 @@ const server = http.createServer(async (request, response) => {
   try {
     if (request.method === "GET" && url.pathname === "/api/auth/session") {
       sendJson(response, 200, {
-        enabled: authEnabled,
+        enabled: authConfig.authEnabled,
         authenticated: isAuthenticated(request),
       });
       return;
@@ -138,17 +152,12 @@ const server = http.createServer(async (request, response) => {
       const body = await readJsonBody(request);
       const password = String(body.password || "");
 
-      if (!authEnabled) {
+      if (!authConfig.authEnabled) {
         sendJson(response, 200, { enabled: false, authenticated: true });
         return;
       }
 
-      const left = Buffer.from(password);
-      const right = Buffer.from(authPassword);
-      const matched =
-        left.length === right.length && timingSafeEqual(left, right);
-
-      if (!matched) {
+      if (!passwordMatches(password, authConfig)) {
         sendJson(response, 401, {
           enabled: true,
           authenticated: false,
@@ -161,7 +170,13 @@ const server = http.createServer(async (request, response) => {
         response,
         200,
         { enabled: true, authenticated: true },
-        { "Set-Cookie": createAuthCookie() },
+        {
+          "Set-Cookie": createAuthCookieHeader(
+            authConfig,
+            `http://${request.headers.host || `${host}:${port}`}${url.pathname}`,
+            new Headers(request.headers),
+          ),
+        },
       );
       return;
     }
@@ -170,9 +185,24 @@ const server = http.createServer(async (request, response) => {
       sendJson(
         response,
         200,
-        { enabled: authEnabled, authenticated: false },
-        { "Set-Cookie": clearAuthCookie() },
+        { enabled: authConfig.authEnabled, authenticated: false },
+        {
+          "Set-Cookie": clearAuthCookieHeader(
+            `http://${request.headers.host || `${host}:${port}`}${url.pathname}`,
+            new Headers(request.headers),
+          ),
+        },
       );
+      return;
+    }
+
+    if (shouldProxyBridgePath(url.pathname)) {
+      if (authConfig.authEnabled && !isAuthenticated(request)) {
+        sendJson(response, 401, { error: "未登录" });
+        return;
+      }
+
+      await proxyBridgeRequest(request, response, url);
       return;
     }
 
@@ -190,6 +220,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  // eslint-disable-next-line no-console
-  console.log(`C-CLIENT-M preview server listening on http://${host}:${port}`);
+  console.log(
+    `C-CLIENT-M preview server listening on http://${host}:${port} (bridge proxy: ${bridgeProxyTarget || "disabled"})`,
+  );
 });

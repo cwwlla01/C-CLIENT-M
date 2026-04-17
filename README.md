@@ -31,25 +31,36 @@
 - React 19
 - TypeScript
 - Vite
-- 纯 CSS token / 自定义组件样式
+- Tailwind CSS / DaisyUI / 自定义样式 token
 
 ## 环境变量
 
-前端是静态构建产物，以下变量在构建阶段注入：
+默认部署策略已经改成“同源 API”。
+
+也就是：
+
+- 前端默认直接请求同源 `/api/*` 和 `/health`
+- 生产环境推荐由 Nginx / 网关做同源反代
+- `npm run preview` / Docker 也可以由内置 `server.mjs` 代做同源转发
+- Vercel 部署会通过仓库内的 `api/*` Functions 保持同源代理和密码门禁
+
+构建阶段变量：
 
 - `VITE_APP_TITLE`
   顶部产品名，默认 `C-CLIENT-M`
-- `VITE_BRIDGE_HTTP_ORIGIN`
-  本地接口入口，默认 `http://127.0.0.1:4285`
 - `VITE_PROJECT_ROOT`
   `POST /api/workspace/discover` 使用的项目根目录，默认 `/workspace/company`
 - `VITE_CCLIENT_KEY`
   当 bridge 开启 API Key 时传入
+- `VITE_BRIDGE_HTTP_ORIGIN`
+  可选，仅用于本地 Vite 开发代理或特殊调试场景；生产同源部署时通常留空
 
-运行时密码门禁：
+运行时变量：
 
 - `APP_LOGIN_PASSWORD`
   为 `npm run preview` / Docker 部署提供访问密码。设置后，首次进入页面会先看到密码校验页。
+- `BRIDGE_PROXY_TARGET`
+  为 `server.mjs` / Vercel Functions 提供后端 bridge 目标地址。设置后，同源 `/api/*` 和 `/health` 会转发到该地址。
 
 可直接从示例文件开始：
 
@@ -64,7 +75,16 @@ npm install
 npm run dev
 ```
 
-默认前端地址由 Vite 输出，bridge 入口默认按 `VITE_BRIDGE_HTTP_ORIGIN` 连接。
+默认前端地址由 Vite 输出。
+
+本地开发时，Vite 会把下面这些同源请求代理到 `VITE_BRIDGE_HTTP_ORIGIN`，若未设置则默认转发到 `http://127.0.0.1:4285`：
+
+- `/health`
+- `/api/settings`
+- `/api/workspace`
+- `/api/runtime`
+- `/api/employee`
+- `/api/task`
 
 ## 构建
 
@@ -122,13 +142,20 @@ npm run build
 docker build -t c-client-m:local .
 ```
 
-如果你要覆盖标题、接口地址或项目根目录：
+如果你要覆盖标题或项目根目录：
 
 ```bash
 docker build \
   --build-arg VITE_APP_TITLE=C-CLIENT-M \
-  --build-arg VITE_BRIDGE_HTTP_ORIGIN=http://127.0.0.1:4285 \
   --build-arg VITE_PROJECT_ROOT=/workspace/company \
+  -t c-client-m:local .
+```
+
+只有在你明确想让前端直接跨域访问 bridge 时，才需要额外传入：
+
+```bash
+docker build \
+  --build-arg VITE_BRIDGE_HTTP_ORIGIN=http://127.0.0.1:4285 \
   -t c-client-m:local .
 ```
 
@@ -137,6 +164,7 @@ docker build \
 ```bash
 docker run --rm -it \
   -e APP_LOGIN_PASSWORD=your-password \
+  -e BRIDGE_PROXY_TARGET=http://127.0.0.1:4285 \
   -p 4275:80 \
   c-client-m:local
 ```
@@ -155,14 +183,58 @@ docker compose up --build
 
 - 前端容器端口：`80`
 - 宿主机映射端口：`4275`
-- 默认 bridge 地址：`http://127.0.0.1:4285`
+- 运行时同源代理目标：`http://host.docker.internal:4285`
 - 若要启用密码门禁，请在 compose 环境里提供 `APP_LOGIN_PASSWORD`
+
+## Nginx 反代
+
+仓库根目录已经附带一份可直接改机器地址的示例配置：
+
+- [nginx.conf](./nginx.conf)
+
+默认约定：
+
+- `127.0.0.1:4275` 是 `C-CLIENT-M` 前端 / 预览服务
+- `127.0.0.1:4285` 是 bridge
+- `/api/auth/*` 转给前端服务
+- `/api/*` 和 `/health` 转给 bridge
+
+这样浏览器始终只访问同一个域名，不会出现 `https` 前端直接请求 `http` 后端的 mixed content。
+
+## Vercel
+
+仓库已经补了：
+
+- [vercel.json](./vercel.json)
+- [`api/auth/session.js`](./api/auth/session.js)
+- [`api/auth/login.js`](./api/auth/login.js)
+- [`api/auth/logout.js`](./api/auth/logout.js)
+- [`api/health.js`](./api/health.js)
+- [`api/[...path].js`](./api/%5B...path%5D.js)
+
+这意味着在 Vercel 上：
+
+- `/api/auth/*` 由 Vercel Functions 处理密码门禁
+- `/api/*` 由 Vercel Functions 反代到 `BRIDGE_PROXY_TARGET`
+- `/health` 通过 [vercel.json](./vercel.json) rewrite 到 `/api/health`
+
+推荐在 Vercel 项目里配置这些环境变量：
+
+- `BRIDGE_PROXY_TARGET`
+- `APP_LOGIN_PASSWORD`
+- `VITE_APP_TITLE`
+- `VITE_PROJECT_ROOT`
+- `VITE_CCLIENT_KEY`
+
+如果你的后端仍然是 `http://...`，Vercel 这套方案也能兼容，因为浏览器访问的是 Vercel 自己的 `https` 域名，请求由服务端函数再转发到后端。
 
 ## 数据来源说明
 
-本项目当前已经切到真实接口优先：
+本项目当前已经切到真实接口优先，并且默认按同源方式访问：
 
-- bridge 正常时直接读取真实数据
+- 前端默认请求同源 `/api/*` 和 `/health`
+- 如果使用 `server.mjs` / Docker / Vercel Functions，可通过 `BRIDGE_PROXY_TARGET` 转发到 bridge
+- 如果使用 Nginx / 网关，推荐直接在入口层转发 `/api/*` 和 `/health`
 - bridge / discover 异常时前端直接显示错误，不再静默回退 mock
 
 其中公司下拉直接使用 `POST /api/workspace/discover` 返回的 `companies` 字段。
