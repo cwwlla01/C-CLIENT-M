@@ -166,6 +166,7 @@ textarea {
 .utility-bar {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   padding: 14px 16px;
   background: var(--surface-strong);
@@ -177,6 +178,8 @@ textarea {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  flex: 1;
+  min-width: 0;
 }
 
 .utility-brand {
@@ -186,6 +189,9 @@ textarea {
   letter-spacing: 0.08em;
   color: var(--accent);
   text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .utility-detail {
@@ -194,18 +200,24 @@ textarea {
   font-size: 12px;
   line-height: 1.4;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .utility-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 .company-dropdown {
   position: relative;
+  min-width: 0;
 }
 
 .dropdown-trigger-surface {
@@ -225,7 +237,15 @@ textarea {
 }
 
 .company-dropdown-trigger {
-  min-width: 168px;
+  width: 330px;
+  max-width: min(330px, calc(100vw - 116px));
+}
+
+.company-dropdown-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .company-dropdown-chevron {
@@ -363,6 +383,7 @@ textarea {
   padding: 3px;
   border-radius: 999px;
   background: var(--surface);
+  flex-shrink: 0;
 }
 
 .theme-toggle-button {
@@ -1134,17 +1155,22 @@ textarea {
     border-bottom: 0;
   }
 
-  .utility-bar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
   .utility-detail {
-    max-width: none;
+    max-width: 140px;
   }
 
   .utility-actions {
-    justify-content: flex-start;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .company-dropdown-trigger {
+    width: min(330px, calc(100vw - 110px));
+    max-width: min(330px, calc(100vw - 110px));
+  }
+
+  .theme-toggle-button {
+    width: 28px;
   }
 
   .overlay {
@@ -1156,5 +1182,22 @@ textarea {
     max-height: 96svh;
     border-radius: 28px 28px 0 0;
     border-bottom: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .utility-bar {
+    gap: 8px;
+    padding-inline: 14px;
+  }
+
+  .utility-detail {
+    display: none;
+  }
+
+  .company-dropdown-trigger {
+    width: min(330px, calc(100vw - 104px));
+    max-width: min(330px, calc(100vw - 104px));
+    padding-inline: 10px;
   }
 }

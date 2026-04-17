@@ -833,7 +833,9 @@ function App() {
                 aria-expanded={companyMenuOpen}
                 onClick={() => setCompanyMenuOpen((current) => !current)}
               >
-                <span>{selectedCompany === "all" ? "全部公司" : selectedCompany}</span>
+                <span className="company-dropdown-label">
+                  {selectedCompany === "all" ? "全部公司" : selectedCompany}
+                </span>
                 <span className={cn("company-dropdown-chevron", companyMenuOpen && "is-open")}>⌄</span>
               </button>
               {companyMenuOpen && (
