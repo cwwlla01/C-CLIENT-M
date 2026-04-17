@@ -46,6 +46,10 @@ type HealthResponse = {
   ok?: boolean;
 };
 
+type SettingsRootResponse = {
+  projectRoot?: string;
+};
+
 type PromptResponse = {
   prompts?: Array<{
     id: string;
@@ -262,13 +266,18 @@ function mapEmployeeTasks(owner: EmployeeRecord, payload?: EmployeeTasksResponse
 export async function loadMobileSnapshot(signal?: AbortSignal): Promise<MobileSnapshot> {
   await probeBridge(signal);
 
+  const rootInfo = await fetchJson<SettingsRootResponse>("/api/settings/root", undefined, signal);
+
   const [discover, prompts] = await Promise.all([
     fetchJson<DiscoverResponse>(
       "/api/workspace/discover",
       {
         method: "POST",
         body: JSON.stringify({
-          projectRoot: import.meta.env.VITE_PROJECT_ROOT ?? "/workspace/company",
+          projectRoot:
+            rootInfo.projectRoot ||
+            import.meta.env.VITE_PROJECT_ROOT ||
+            "/workspace/company",
         }),
       },
       signal,
@@ -432,7 +441,6 @@ export async function assignTask(employee: EmployeeRecord, draft: TaskDraft) {
       taskDescription: draft.description,
       priority: draft.priority,
       timeWindow: draft.timeWindow,
-      deadlineAt: draft.deadlineAt,
       source: draft.source,
       forceCurrent: false,
       attachments,
