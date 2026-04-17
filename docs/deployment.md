@@ -41,6 +41,18 @@ VITE_BRIDGE_HTTP_ORIGIN=http://127.0.0.1:4285
 VITE_PROJECT_ROOT=/workspace/company
 ```
 
+Runtime access gate:
+
+```text
+APP_LOGIN_PASSWORD=your-password
+```
+
+When `APP_LOGIN_PASSWORD` is set:
+
+- the preview/container server exposes `/api/auth/session`
+- the UI shows a password screen before rendering the app
+- successful login sets an HttpOnly cookie on the same origin
+
 ## Docker Build
 
 ```bash
@@ -54,7 +66,10 @@ docker build \
 ## Docker Run
 
 ```bash
-docker run --rm -it -p 4275:80 c-client-m:local
+docker run --rm -it \
+  -e APP_LOGIN_PASSWORD=your-password \
+  -p 4275:80 \
+  c-client-m:local
 ```
 
 Open:

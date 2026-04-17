@@ -46,6 +46,11 @@
 - `VITE_CCLIENT_KEY`
   当 bridge 开启 API Key 时传入
 
+运行时密码门禁：
+
+- `APP_LOGIN_PASSWORD`
+  为 `npm run preview` / Docker 部署提供访问密码。设置后，首次进入页面会先看到密码校验页。
+
 可直接从示例文件开始：
 
 ```bash
@@ -65,6 +70,33 @@ npm run dev
 
 ```bash
 npm run build
+```
+
+## 访问密码
+
+如果你希望部署后先输入密码再进入系统，可以在运行时设置：
+
+```bash
+APP_LOGIN_PASSWORD=your-password npm run preview
+```
+
+或在 Docker / compose 中设置：
+
+```bash
+APP_LOGIN_PASSWORD=your-password
+```
+
+说明：
+
+- 密码校验发生在同源预览服务 `/api/auth/*`
+- 前端不会把密码编进构建产物
+- 本地 `npm run dev` 默认不启用这层校验，方便样式和交互开发
+
+Windows PowerShell 示例：
+
+```powershell
+$env:APP_LOGIN_PASSWORD = "your-password"
+npm run preview
 ```
 
 ## CI
@@ -103,7 +135,10 @@ docker build \
 ### 直接运行
 
 ```bash
-docker run --rm -it -p 4275:80 c-client-m:local
+docker run --rm -it \
+  -e APP_LOGIN_PASSWORD=your-password \
+  -p 4275:80 \
+  c-client-m:local
 ```
 
 启动后访问：
@@ -121,6 +156,7 @@ docker compose up --build
 - 前端容器端口：`80`
 - 宿主机映射端口：`4275`
 - 默认 bridge 地址：`http://127.0.0.1:4285`
+- 若要启用密码门禁，请在 compose 环境里提供 `APP_LOGIN_PASSWORD`
 
 ## 数据来源说明
 

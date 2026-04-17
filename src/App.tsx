@@ -17,7 +17,9 @@ import {
   respondToReview,
   switchEmployeeProject,
 } from "./lib/bridge";
+import { getAuthSession, loginWithPassword } from "./lib/auth";
 import type {
+  AuthSession,
   ConnectionState,
   DeliveryRecord,
   DispatchResult,
@@ -42,6 +44,22 @@ type EmployeeExtrasState = {
   deliveries: DeliveryRecord[];
 };
 
+type AuthGateState = AuthSession & {
+  loading: boolean;
+  submitting: boolean;
+  error: string;
+  password: string;
+};
+
+type ComposerPopoverType = "employee" | "priority" | "timeWindow" | null;
+
+type ComposerPopoverState = {
+  type: ComposerPopoverType;
+  top: number;
+  left: number;
+  width: number;
+};
+
 const navItems: Array<{ id: NavTab; label: string }> = [
   { id: "home", label: "首页" },
   { id: "employees", label: "员工" },
@@ -59,6 +77,16 @@ const taskFilters = [
   { id: "all", label: "全部任务" },
   { id: "pending", label: "待处理" },
 ] as const;
+
+const priorityOptions: TaskDraft["priority"][] = ["P0", "P1", "P2"];
+const timeWindowOptions: Array<{ value: TaskDraft["timeWindow"]; label: string }> = [
+  { value: "within_30m", label: "30 分钟内" },
+  { value: "within_1h", label: "1 小时内" },
+  { value: "within_3h", label: "3 小时内" },
+  { value: "within_12h", label: "12 小时内" },
+  { value: "within_24h", label: "24 小时内" },
+  { value: "no_deadline", label: "无明确截止" },
+];
 
 function cn(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -108,11 +136,14 @@ function createInitialTaskDraft(employeeId = "", projectName = ""): TaskDraft {
     projectName,
     description: "",
     priority: "P1",
-    timeWindow: "today",
+    timeWindow: "within_3h",
     source: "移动监督端",
-    deadlineAt: "",
     attachments: [],
   };
+}
+
+function getTimeWindowLabel(value: TaskDraft["timeWindow"]) {
+  return timeWindowOptions.find((option) => option.value === value)?.label ?? value;
 }
 
 function buildRiskMessages(snapshot: MobileSnapshot) {
@@ -150,10 +181,29 @@ function App() {
     deliveries: [],
   });
   const [composerOpen, setComposerOpen] = useState(false);
+  const [composerPopover, setComposerPopover] = useState<ComposerPopoverState>({
+    type: null,
+    top: 0,
+    left: 0,
+    width: 0,
+  });
   const [taskDraft, setTaskDraft] = useState<TaskDraft>(() => createInitialTaskDraft());
   const [toast, setToast] = useState<ToastState | null>(null);
   const [dispatchResult, setDispatchResult] = useState<DispatchResult | null>(null);
+  const [auth, setAuth] = useState<AuthGateState>({
+    enabled: false,
+    authenticated: false,
+    loading: true,
+    submitting: false,
+    error: "",
+    password: "",
+  });
   const companyMenuRef = useRef<HTMLDivElement | null>(null);
+  const composerPopoverRef = useRef<HTMLDivElement | null>(null);
+  const employeeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const priorityButtonRef = useRef<HTMLButtonElement | null>(null);
+  const timeWindowButtonRef = useRef<HTMLButtonElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const deferredEmployeeQuery = useDeferredValue(employeeQuery.trim().toLowerCase());
   const companyOptions = ["all", ...snapshot.companies];
@@ -262,10 +312,47 @@ function App() {
   });
 
   useEffect(() => {
+    let cancelled = false;
+
+    void getAuthSession()
+      .then((session) => {
+        if (cancelled) {
+          return;
+        }
+
+        setAuth((current) => ({
+          ...current,
+          ...session,
+          loading: false,
+        }));
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+
+        // In local vite dev there is no auth server, so keep auth disabled.
+        setAuth((current) => ({
+          ...current,
+          enabled: false,
+          authenticated: true,
+          loading: false,
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
+    if (auth.loading || (auth.enabled && !auth.authenticated)) {
+      return () => controller.abort();
+    }
     void refreshSnapshot(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [auth.authenticated, auth.enabled, auth.loading]);
 
   useEffect(() => {
     if (connection.mode !== "live") {
@@ -331,6 +418,38 @@ function App() {
   }, [companyMenuOpen]);
 
   useEffect(() => {
+    if (!composerPopover.type) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as Node;
+      const inMenu = composerPopoverRef.current?.contains(target);
+      const inButtons =
+        employeeButtonRef.current?.contains(target) ||
+        priorityButtonRef.current?.contains(target) ||
+        timeWindowButtonRef.current?.contains(target);
+
+      if (!inMenu && !inButtons) {
+        setComposerPopover({ type: null, top: 0, left: 0, width: 0 });
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setComposerPopover({ type: null, top: 0, left: 0, width: 0 });
+      }
+    }
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [composerPopover]);
+
+  useEffect(() => {
     if (!toast) {
       return;
     }
@@ -377,7 +496,27 @@ function App() {
     nextDraft.source = "移动监督端";
 
     setTaskDraft(nextDraft);
+    setComposerPopover({ type: null, top: 0, left: 0, width: 0 });
     setComposerOpen(true);
+  }
+
+  function toggleComposerPopover(type: Exclude<ComposerPopoverType, null>, element: HTMLElement | null) {
+    if (!element) {
+      return;
+    }
+
+    if (composerPopover.type === type) {
+      setComposerPopover({ type: null, top: 0, left: 0, width: 0 });
+      return;
+    }
+
+    const rect = element.getBoundingClientRect();
+    setComposerPopover({
+      type,
+      top: rect.bottom + 8,
+      left: rect.left,
+      width: rect.width,
+    });
   }
 
   function handleDraftChange<Key extends keyof TaskDraft>(key: Key, value: TaskDraft[Key]) {
@@ -524,7 +663,7 @@ function App() {
     try {
       let dispatchTone: DispatchResult["tone"] = "success";
       let dispatchTitle = `已发布给 ${targetEmployee.name}`;
-      let dispatchDetail = `${taskDraft.projectName} · ${taskDraft.timeWindow}`;
+      let dispatchDetail = `${taskDraft.projectName} · ${getTimeWindowLabel(taskDraft.timeWindow)}`;
 
       if (connection.mode !== "live") {
         throw new Error("bridge 不可用，当前无法发布真实任务");
@@ -553,7 +692,7 @@ function App() {
         company: targetEmployee.company,
         projectName: taskDraft.projectName,
         summary: taskDraft.description,
-        status: taskDraft.timeWindow === "immediate" ? "立即执行" : "等待处理",
+        status: taskDraft.timeWindow === "within_30m" ? "立即执行" : getTimeWindowLabel(taskDraft.timeWindow),
         tone: "active" as const,
       };
 
@@ -607,8 +746,77 @@ function App() {
         ? `Bridge 错误 · ${connection.detail}`
         : "正在尝试连接 bridge";
 
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!auth.password.trim()) {
+      setAuth((current) => ({ ...current, error: "请输入访问密码" }));
+      return;
+    }
+
+    setAuth((current) => ({ ...current, submitting: true, error: "" }));
+    try {
+      const session = await loginWithPassword(auth.password);
+      setAuth((current) => ({
+        ...current,
+        ...session,
+        loading: false,
+        submitting: false,
+        password: "",
+        error: "",
+      }));
+    } catch (error) {
+      setAuth((current) => ({
+        ...current,
+        submitting: false,
+        error: error instanceof Error ? error.message : "登录失败",
+      }));
+    }
+  }
+
+  if (auth.loading) {
+    return (
+      <div className={cn("app-shell", theme === "dark" && "theme-dark")}>
+        <div className="auth-shell">
+          <div className="auth-card">
+            <p className="utility-brand">{APP_TITLE}</p>
+            <h1 className="auth-title">检查访问权限</h1>
+            <p className="auth-copy">正在确认当前部署是否启用了访问密码。</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (auth.enabled && !auth.authenticated) {
+    return (
+      <div className={cn("app-shell", theme === "dark" && "theme-dark")}>
+        <div className="auth-shell">
+          <form className="auth-card" onSubmit={handleAuthSubmit}>
+            <p className="utility-brand">{APP_TITLE}</p>
+            <h1 className="auth-title">请输入访问密码</h1>
+            <p className="auth-copy">当前部署已启用访问保护。输入部署时设置的密码后继续。</p>
+            <input
+              className="auth-input"
+              type="password"
+              value={auth.password}
+              onChange={(event) => setAuth((current) => ({ ...current, password: event.target.value }))}
+              placeholder="访问密码"
+            />
+            {auth.error && <p className="auth-error">{auth.error}</p>}
+            <button className="auth-submit" type="submit" disabled={auth.submitting}>
+              {auth.submitting ? "验证中" : "进入系统"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={cn("app-shell", theme === "dark" && "theme-dark")}>
+    <div
+      className={cn("app-shell", theme === "dark" && "theme-dark")}
+      data-theme={theme === "dark" ? "supervisor-dark" : "supervisor-light"}
+    >
       <div className="device">
         <header className="utility-bar">
           <div className="utility-brand-block">
@@ -620,7 +828,7 @@ function App() {
           <div className="utility-actions">
             <div className="company-dropdown" ref={companyMenuRef}>
               <button
-                className="company-dropdown-trigger"
+                className="dropdown-trigger-surface company-dropdown-trigger"
                 type="button"
                 aria-haspopup="menu"
                 aria-expanded={companyMenuOpen}
@@ -630,14 +838,11 @@ function App() {
                 <span className={cn("company-dropdown-chevron", companyMenuOpen && "is-open")}>⌄</span>
               </button>
               {companyMenuOpen && (
-                <div className="company-dropdown-menu" role="menu" aria-label="公司筛选">
+                <div className="dropdown-menu-surface company-dropdown-menu" role="menu" aria-label="公司筛选">
                   {companyOptions.map((company) => (
                     <button
                       key={company}
-                      className={cn(
-                        "company-dropdown-item",
-                        selectedCompany === company && "is-active",
-                      )}
+                      className={cn("dropdown-item-surface company-dropdown-item", selectedCompany === company && "is-active")}
                       type="button"
                       role="menuitemradio"
                       aria-checked={selectedCompany === company}
@@ -1070,31 +1275,91 @@ function App() {
                 <p className="sheet-title">发布任务</p>
                 <p className="sheet-subtitle">完整派单：员工、项目、描述、优先级、时间窗口、附件。</p>
               </div>
-              <button className="close-button" type="button" onClick={() => setComposerOpen(false)}>
+              <button className="close-button btn btn-ghost btn-sm rounded-xl" type="button" onClick={() => setComposerOpen(false)}>
                 关闭
               </button>
             </div>
 
+            {composerPopover.type && (
+              <div
+                ref={composerPopoverRef}
+                className="composer-popover composer-dropdown-menu-surface"
+                style={{
+                  top: composerPopover.top,
+                  left: composerPopover.left,
+                  width: composerPopover.width,
+                }}
+                role="menu"
+              >
+                {composerPopover.type === "employee" &&
+                  snapshot.employees.map((employee) => (
+                    <button
+                      key={employee.id}
+                      className={cn("dropdown-item-surface", taskDraft.employeeId === employee.id && "is-active")}
+                      type="button"
+                      onClick={() => {
+                        handleDraftChange("employeeId", employee.id);
+                        setComposerPopover({ type: null, top: 0, left: 0, width: 0 });
+                      }}
+                    >
+                      {employee.name} · {employee.role}
+                    </button>
+                  ))}
+                {composerPopover.type === "priority" &&
+                  priorityOptions.map((option) => (
+                    <button
+                      key={option}
+                      className={cn("dropdown-item-surface", taskDraft.priority === option && "is-active")}
+                      type="button"
+                      onClick={() => {
+                        handleDraftChange("priority", option);
+                        setComposerPopover({ type: null, top: 0, left: 0, width: 0 });
+                      }}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                {composerPopover.type === "timeWindow" &&
+                  timeWindowOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      className={cn("dropdown-item-surface", taskDraft.timeWindow === option.value && "is-active")}
+                      type="button"
+                      onClick={() => {
+                        handleDraftChange("timeWindow", option.value);
+                        setComposerPopover({ type: null, top: 0, left: 0, width: 0 });
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+              </div>
+            )}
+
             <form className="composer-form" onSubmit={handleSubmitTask}>
               <label className="field-card">
                 <span className="field-label">员工</span>
-                <select
-                  className="field-input"
-                  value={taskDraft.employeeId}
-                  onChange={(event) => handleDraftChange("employeeId", event.target.value)}
+                <button
+                  ref={employeeButtonRef}
+                  className="dropdown-trigger-surface"
+                  type="button"
+                  aria-expanded={composerPopover.type === "employee"}
+                  onClick={() => toggleComposerPopover("employee", employeeButtonRef.current)}
                 >
-                  {snapshot.employees.map((employee) => (
-                    <option key={employee.id} value={employee.id}>
-                      {employee.name} · {employee.role}
-                    </option>
-                  ))}
-                </select>
+                  <span>
+                    {snapshot.employees.find((employee) => employee.id === taskDraft.employeeId)?.name ??
+                      "选择员工"}
+                    {" · "}
+                    {snapshot.employees.find((employee) => employee.id === taskDraft.employeeId)?.role ?? ""}
+                  </span>
+                  <span>⌄</span>
+                </button>
               </label>
 
               <label className="field-card">
                 <span className="field-label">项目</span>
                 <input
-                  className="field-input"
+                  className="input input-bordered w-full rounded-2xl bg-base-100"
                   value={taskDraft.projectName}
                   onChange={(event) => handleDraftChange("projectName", event.target.value)}
                 />
@@ -1103,7 +1368,7 @@ function App() {
               <label className="field-card">
                 <span className="field-label">任务描述</span>
                 <textarea
-                  className="field-input field-textarea"
+                  className="field-textarea textarea textarea-bordered w-full rounded-2xl bg-base-100"
                   value={taskDraft.description}
                   onChange={(event) => handleDraftChange("description", event.target.value)}
                 />
@@ -1112,58 +1377,83 @@ function App() {
               <div className="field-grid">
                 <label className="field-card">
                   <span className="field-label">优先级</span>
-                  <select
-                    className="field-input"
-                    value={taskDraft.priority}
-                    onChange={(event) => handleDraftChange("priority", event.target.value as TaskDraft["priority"])}
+                  <button
+                    ref={priorityButtonRef}
+                    className="dropdown-trigger-surface"
+                    type="button"
+                    aria-expanded={composerPopover.type === "priority"}
+                    onClick={() => toggleComposerPopover("priority", priorityButtonRef.current)}
                   >
-                    <option value="P0">P0</option>
-                    <option value="P1">P1</option>
-                    <option value="P2">P2</option>
-                  </select>
+                    <span>{taskDraft.priority}</span>
+                    <span>⌄</span>
+                  </button>
                 </label>
 
                 <label className="field-card">
                   <span className="field-label">时间窗口</span>
-                  <select
-                    className="field-input"
-                    value={taskDraft.timeWindow}
-                    onChange={(event) =>
-                      handleDraftChange("timeWindow", event.target.value as TaskDraft["timeWindow"])
-                    }
+                  <button
+                    ref={timeWindowButtonRef}
+                    className="dropdown-trigger-surface"
+                    type="button"
+                    aria-expanded={composerPopover.type === "timeWindow"}
+                    onClick={() => toggleComposerPopover("timeWindow", timeWindowButtonRef.current)}
                   >
-                    <option value="immediate">immediate</option>
-                    <option value="today">today</option>
-                    <option value="this_week">this_week</option>
-                  </select>
+                    <span>{getTimeWindowLabel(taskDraft.timeWindow)}</span>
+                    <span>⌄</span>
+                  </button>
                 </label>
               </div>
 
-              <label className="field-card">
-                <span className="field-label">截止时间</span>
-                <input
-                  className="field-input"
-                  type="datetime-local"
-                  value={taskDraft.deadlineAt}
-                  onChange={(event) => handleDraftChange("deadlineAt", event.target.value)}
-                />
-              </label>
+              <article className="field-card">
+                <span className="field-label">截止规则</span>
+                <div className="deadline-note rounded-2xl border border-base-300 bg-base-100 p-4">
+                  <p className="text-sm font-semibold text-base-content">由系统自动换算截止时间</p>
+                  <p className="text-xs text-base-content/60">
+                    当前按“{getTimeWindowLabel(taskDraft.timeWindow)}”发送，不再传具体时间。
+                  </p>
+                </div>
+              </article>
 
               <label className="field-card">
                 <span className="field-label">附件</span>
-                <input className="field-input" type="file" multiple onChange={handleAttachmentChange} />
-                {taskDraft.attachments.length > 0 && (
-                  <p className="attachment-list">
-                    {taskDraft.attachments.map((file) => file.name).join(" · ")}
-                  </p>
-                )}
+                <input
+                  ref={fileInputRef}
+                  className="hidden"
+                  type="file"
+                  multiple
+                  onChange={handleAttachmentChange}
+                />
+                <div className="file-upload-shell rounded-2xl border border-base-300 bg-base-100 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-base-content">上传参考资料</p>
+                      <p className="text-xs text-base-content/60">支持图片、文档和其他任务附件</p>
+                    </div>
+                    <button
+                      className="btn btn-outline btn-sm rounded-xl"
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      选择文件
+                    </button>
+                  </div>
+                  {taskDraft.attachments.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {taskDraft.attachments.map((file) => (
+                        <span key={`${file.name}-${file.size}`} className="badge badge-outline gap-1 rounded-full px-3 py-3">
+                          {file.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </label>
 
               <div className="composer-actions">
-                <button className="runtime-button neutral" type="button" onClick={() => setComposerOpen(false)}>
+                <button className="btn btn-ghost rounded-2xl flex-1" type="button" onClick={() => setComposerOpen(false)}>
                   取消
                 </button>
-                <button className="runtime-button primary" type="submit">
+                <button className="btn btn-primary rounded-2xl flex-1" type="submit">
                   发布任务
                 </button>
               </div>

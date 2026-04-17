@@ -9,6 +9,10 @@ services:
         VITE_PROJECT_ROOT: /workspace/company
         VITE_CCLIENT_KEY: ""
     container_name: c-client-m
+    environment:
+      HOST: 0.0.0.0
+      PORT: 80
+      APP_LOGIN_PASSWORD: ${APP_LOGIN_PASSWORD}
     ports:
       - "4275:80"
     restart: unless-stopped

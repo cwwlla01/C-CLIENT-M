@@ -18,11 +18,18 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine AS runtime
+FROM node:24-alpine AS runtime
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /app/dist /usr/share/nginx/html
+ENV PORT=80
+ENV HOST=0.0.0.0
+ENV APP_LOGIN_PASSWORD=
+
+WORKDIR /app
+
+COPY --from=builder /app/dist ./dist
+COPY package.json ./package.json
+COPY server.mjs ./server.mjs
 
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "server.mjs"]

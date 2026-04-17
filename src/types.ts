@@ -18,6 +18,11 @@ export type ConnectionState = {
   detail: string;
 };
 
+export type AuthSession = {
+  enabled: boolean;
+  authenticated: boolean;
+};
+
 export type ProjectSpace = {
   id: string;
   projectName: string;
@@ -111,8 +116,13 @@ export type TaskDraft = {
   projectName: string;
   description: string;
   priority: "P0" | "P1" | "P2";
-  timeWindow: "today" | "this_week" | "immediate";
+  timeWindow:
+    | "within_30m"
+    | "within_1h"
+    | "within_3h"
+    | "within_12h"
+    | "within_24h"
+    | "no_deadline";
   source: string;
-  deadlineAt: string;
   attachments: File[];
 };
