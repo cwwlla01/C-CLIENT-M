@@ -27,9 +27,12 @@ ENV BRIDGE_PROXY_TARGET=
 
 WORKDIR /app
 
+COPY package*.json ./
+RUN npm ci --omit=dev
+
 COPY --from=builder /app/dist ./dist
-COPY package.json ./package.json
 COPY server.mjs ./server.mjs
+COPY server-lib ./server-lib
 
 EXPOSE 80
 

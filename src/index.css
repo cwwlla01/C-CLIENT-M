@@ -178,8 +178,8 @@ textarea {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: 72px;
 }
 
 .utility-brand {
@@ -211,13 +211,16 @@ textarea {
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
 .company-dropdown {
   position: relative;
+  flex: 0 1 auto;
+  width: fit-content;
   min-width: 0;
+  max-width: min(330px, calc(100vw - 170px));
 }
 
 .dropdown-trigger-surface {
@@ -237,11 +240,12 @@ textarea {
 }
 
 .company-dropdown-trigger {
-  width: 330px;
-  max-width: min(330px, calc(100vw - 116px));
+  width: auto;
+  max-width: 100%;
 }
 
 .company-dropdown-label {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -306,6 +310,7 @@ textarea {
 
 .connection-pill,
 .ghost-button,
+.utility-icon-button,
 .theme-toggle-button,
 .chip-button,
 .close-button,
@@ -322,6 +327,7 @@ textarea {
 
 .connection-pill,
 .ghost-button,
+.utility-icon-button,
 .theme-toggle,
 .theme-toggle-button,
 .chip-button,
@@ -335,6 +341,7 @@ textarea {
 
 .connection-pill,
 .ghost-button,
+.utility-icon-button,
 .theme-toggle-button {
   min-height: 38px;
   border-radius: 999px;
@@ -367,6 +374,17 @@ textarea {
 .ghost-button {
   font-size: 13px;
   font-weight: 700;
+}
+
+.utility-icon-button {
+  width: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .ghost-button:disabled,
@@ -439,6 +457,17 @@ textarea {
   font-size: 2rem;
   line-height: 1.05;
   letter-spacing: -0.04em;
+}
+
+.page-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-heading-action {
+  margin-left: 6px;
 }
 
 .page-meta {
@@ -785,6 +814,22 @@ textarea {
   background: color-mix(in oklab, var(--surface) 84%, #ffcc66 16%);
 }
 
+.review-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.review-reply-box,
+.info-block {
+  margin-top: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;
@@ -997,6 +1042,47 @@ textarea {
   gap: 8px;
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.detail-grid-item {
+  border-radius: 16px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.detail-grid-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.detail-grid-value {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.detail-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-primary);
+}
+
+.detail-list li + li {
+  margin-top: 6px;
+}
+
 .mini-action {
   min-height: 30px;
   padding: 0 12px;
@@ -1018,6 +1104,46 @@ textarea {
 .field-grid {
   display: flex;
   gap: 10px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.settings-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.settings-toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-muted);
+  padding: 12px 14px;
+}
+
+.settings-toggle-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.settings-toggle-copy,
+.settings-inline-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .sheet-actions {
@@ -1164,9 +1290,8 @@ textarea {
     gap: 6px;
   }
 
-  .company-dropdown-trigger {
-    width: min(330px, calc(100vw - 110px));
-    max-width: min(330px, calc(100vw - 110px));
+  .company-dropdown {
+    max-width: min(220px, calc(100vw - 206px));
   }
 
   .theme-toggle-button {
@@ -1183,6 +1308,18 @@ textarea {
     border-radius: 28px 28px 0 0;
     border-bottom: 0;
   }
+
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-heading-row {
+    gap: 10px;
+  }
 }
 
 @media (max-width: 420px) {
@@ -1195,9 +1332,11 @@ textarea {
     display: none;
   }
 
+  .company-dropdown {
+    max-width: min(168px, calc(100vw - 184px));
+  }
+
   .company-dropdown-trigger {
-    width: min(330px, calc(100vw - 104px));
-    max-width: min(330px, calc(100vw - 104px));
     padding-inline: 10px;
   }
 }

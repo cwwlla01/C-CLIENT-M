@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   clearAuthCookieHeader,
   createAuthCookieHeader,
@@ -43,6 +44,7 @@ function parseArg(name, fallback) {
 const host = parseArg("--host", process.env.HOST || "127.0.0.1");
 const port = Number(parseArg("--port", process.env.PORT || "80"));
 const bridgeProxyTarget = getBridgeProxyTarget();
+const terminalProxyTarget = bridgeProxyTarget.replace(/^http/i, "ws");
 
 function isAuthenticated(request) {
   return isAuthenticatedCookieHeader(request.headers.cookie || "", authConfig);
@@ -71,6 +73,19 @@ async function readJsonBody(request) {
 
 function hasRequestBody(method) {
   return method !== "GET" && method !== "HEAD";
+}
+
+function writeUpgradeError(socket, statusCode, message) {
+  socket.write(
+    [
+      `HTTP/1.1 ${statusCode} ${message}`,
+      "Connection: close",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      message,
+    ].join("\r\n"),
+  );
+  socket.destroy();
 }
 
 async function proxyBridgeRequest(request, response, url) {
@@ -217,6 +232,111 @@ const server = http.createServer(async (request, response) => {
       error: error instanceof Error ? error.message : "Internal server error",
     });
   }
+});
+
+const terminalProxyServer = new WebSocketServer({ noServer: true });
+
+terminalProxyServer.on("connection", (clientSocket, request) => {
+  const requestUrl = new URL(request.url || "/", `http://${request.headers.host}`);
+
+  if (!bridgeProxyTarget) {
+    clientSocket.send(
+      JSON.stringify({
+        type: "error",
+        message: "Bridge 终端代理未配置，请设置 BRIDGE_PROXY_TARGET。",
+      }),
+    );
+    clientSocket.close(1011, "Bridge terminal proxy unavailable");
+    return;
+  }
+
+  const upstreamUrl = new URL(
+    `${requestUrl.pathname}${requestUrl.search}`,
+    `${terminalProxyTarget}/`,
+  );
+  const upstreamSocket = new WebSocket(upstreamUrl);
+
+  const relayToClient = (payload, isBinary = false) => {
+    if (clientSocket.readyState === WebSocket.OPEN) {
+      clientSocket.send(payload, { binary: isBinary });
+    }
+  };
+
+  const relayToUpstream = (payload, isBinary = false) => {
+    if (upstreamSocket.readyState === WebSocket.OPEN) {
+      upstreamSocket.send(payload, { binary: isBinary });
+    }
+  };
+
+  upstreamSocket.on("message", (payload, isBinary) => {
+    relayToClient(payload, isBinary);
+  });
+
+  clientSocket.on("message", (payload, isBinary) => {
+    relayToUpstream(payload, isBinary);
+  });
+
+  upstreamSocket.on("close", (code, reason) => {
+    if (clientSocket.readyState === WebSocket.OPEN) {
+      clientSocket.close(code, reason.toString());
+    }
+  });
+
+  clientSocket.on("close", (code, reason) => {
+    if (upstreamSocket.readyState === WebSocket.OPEN) {
+      upstreamSocket.close(code, reason);
+      return;
+    }
+
+    if (upstreamSocket.readyState === WebSocket.CONNECTING) {
+      upstreamSocket.terminate();
+    }
+  });
+
+  upstreamSocket.on("error", (error) => {
+    relayToClient(
+      JSON.stringify({
+        type: "error",
+        message: error instanceof Error ? error.message : "terminal proxy error",
+      }),
+    );
+    if (clientSocket.readyState === WebSocket.OPEN) {
+      clientSocket.close(1011, "terminal proxy error");
+    }
+  });
+
+  clientSocket.on("error", () => {
+    if (upstreamSocket.readyState === WebSocket.OPEN) {
+      upstreamSocket.close(1011, "client socket error");
+      return;
+    }
+
+    if (upstreamSocket.readyState === WebSocket.CONNECTING) {
+      upstreamSocket.terminate();
+    }
+  });
+});
+
+server.on("upgrade", (request, socket, head) => {
+  if (!request.url) {
+    socket.destroy();
+    return;
+  }
+
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  if (url.pathname !== "/terminal") {
+    socket.destroy();
+    return;
+  }
+
+  if (authConfig.authEnabled && !isAuthenticated(request)) {
+    writeUpgradeError(socket, 401, "Unauthorized");
+    return;
+  }
+
+  terminalProxyServer.handleUpgrade(request, socket, head, (clientSocket) => {
+    terminalProxyServer.emit("connection", clientSocket, request);
+  });
 });
 
 server.listen(port, host, () => {

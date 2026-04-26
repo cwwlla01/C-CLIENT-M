@@ -85,6 +85,7 @@ These values are injected at build time:
 - `VITE_PROJECT_ROOT`
 - `VITE_CCLIENT_KEY`
 - `VITE_BRIDGE_HTTP_ORIGIN` optional, for local Vite dev proxy or direct debug only
+- `VITE_BRIDGE_WS_ORIGIN` optional, for direct WebSocket terminal access when same-origin `/terminal` is unavailable
 
 Recommended defaults:
 
@@ -109,6 +110,7 @@ When `APP_LOGIN_PASSWORD` is set:
 When `BRIDGE_PROXY_TARGET` is set:
 
 - `server.mjs` proxies same-origin `/api/*` and `/health`
+- `server.mjs` also proxies same-origin `/terminal` WebSocket
 - Vercel `api/*` Functions proxy the same routes too
 - unauthenticated users cannot call those proxied endpoints when password gate is enabled
 - you can run the frontend without an outer Nginx during local preview or container testing
@@ -181,6 +183,7 @@ Behavior on Vercel:
 - `/api/auth/*` is handled by Vercel Functions
 - `/api/*` is proxied to `BRIDGE_PROXY_TARGET`
 - `/health` is rewritten to `/api/health`
+- `/terminal` is not proxied by Vercel Functions, so real-time CLI requires `VITE_BRIDGE_WS_ORIGIN=wss://...`
 - the browser stays on your Vercel domain, so an `https` frontend can still work with an `http` backend through the server-side proxy
 
 ## Matching C-CLIENT

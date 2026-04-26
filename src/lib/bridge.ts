@@ -1,5 +1,9 @@
 import type {
+  InspectorSettings,
+  EmployeeLiveStatus,
   EmployeeRecord,
+  InspectorResult,
+  InspectorTestResult,
   MobileSnapshot,
   ProjectSpace,
   ReviewAction,
@@ -8,8 +12,10 @@ import type {
   TaskDraft,
   TaskRecord,
 } from "../types";
+import { createDefaultInspectorSettings } from "../types";
 
 const BRIDGE_HTTP_ORIGIN = import.meta.env.VITE_BRIDGE_HTTP_ORIGIN?.trim().replace(/\/+$/, "") ?? "";
+const BRIDGE_WS_ORIGIN = import.meta.env.VITE_BRIDGE_WS_ORIGIN?.trim().replace(/\/+$/, "") ?? "";
 const DEFAULT_PROJECT_ROOT = import.meta.env.VITE_PROJECT_ROOT?.trim() || "/workspace/company";
 
 const API_KEY = import.meta.env.VITE_CCLIENT_KEY?.trim() ?? "";
@@ -54,9 +60,13 @@ type PromptResponse = {
   prompts?: Array<{
     id: string;
     memberId: string;
+    replyRiskLevel?: string;
+    replyText?: string;
+    replyType?: string;
+    responseMode: "approve_reject" | "continue_only" | "notify_only" | string;
     title: string;
     summary: string;
-    responseMode: string;
+    type?: string;
     workspacePath: string;
     createdAt: string;
   }>;
@@ -67,6 +77,7 @@ type PromptResponse = {
     action: string;
     memberId: string;
     createdAt: string;
+    workspacePath?: string;
   }>;
 };
 
@@ -106,6 +117,35 @@ type EmployeeTasksResponse = {
       priority?: string;
     }>;
   };
+};
+
+type EmployeeStatusResponse = {
+  status?: {
+    runtimeStatus?: string;
+    workStatus?: string;
+    currentProject?: string;
+    currentTask?: string;
+    nextAction?: string;
+    sessionId?: string | null;
+    pid?: number | null;
+    startedAt?: string | null;
+    stoppedAt?: string | null;
+    recoveryPending?: boolean;
+    workspacePath?: string;
+    resolvedShell?: string | null;
+    codexSessionId?: string | null;
+    inspector?: Record<string, unknown> | null;
+  };
+};
+
+type InspectorReviewResponse = {
+  ok?: boolean;
+  result?: Record<string, unknown> | null;
+};
+
+type InspectorSettingsLoadResponse = {
+  filePath?: string;
+  settings?: Record<string, unknown>;
 };
 
 async function fetchJson<T>(path: string, init?: RequestInit, signal?: AbortSignal) {
@@ -211,6 +251,7 @@ function mapEmployee(runtime: DiscoverRuntime): EmployeeRecord {
     recentCompleted: runtime.recentCompleted ?? null,
     sessionId: runtime.sessionId ?? null,
     pid: runtime.pid ?? null,
+    codexSessionId: null,
     projectSpaces: [
       {
         id: `${workspacePath}:${projectName}`,
@@ -228,6 +269,135 @@ function mapEmployee(runtime: DiscoverRuntime): EmployeeRecord {
         meta: runtime.recentArtifact ? "最近交付" : "最近完成",
       },
     ],
+  };
+}
+
+function mapInspectorReplyCandidate(value: unknown): InspectorResult["replyCandidate"] {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  return {
+    type: String(candidate.type || ""),
+    riskLevel: String(candidate.riskLevel || ""),
+    suggestedReply: String(candidate.suggestedReply || ""),
+    summary: String(candidate.summary || ""),
+  };
+}
+
+function mapInspectorResult(value: unknown): InspectorResult | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const raw = value as Record<string, unknown>;
+
+  return {
+    taskState: String(raw.taskState || ""),
+    verdict: String(raw.verdict || ""),
+    confidence: typeof raw.confidence === "number" ? raw.confidence : null,
+    summary: String(raw.summary || ""),
+    ruleMatches: Array.isArray(raw.ruleMatches) ? raw.ruleMatches.map((item) => String(item)) : [],
+    risks: Array.isArray(raw.risks) ? raw.risks.map((item) => String(item)) : [],
+    suggestions: Array.isArray(raw.suggestions) ? raw.suggestions.map((item) => String(item)) : [],
+    replyCandidate: mapInspectorReplyCandidate(raw.replyCandidate),
+    targetFiles: Array.isArray(raw.targetFiles) ? raw.targetFiles.map((item) => String(item)) : [],
+    matchedTargetFiles: Array.isArray(raw.matchedTargetFiles)
+      ? raw.matchedTargetFiles.map((item) => String(item))
+      : [],
+    missingTargetFiles: Array.isArray(raw.missingTargetFiles)
+      ? raw.missingTargetFiles.map((item) => String(item))
+      : [],
+    lastSilenceSeconds: typeof raw.lastSilenceSeconds === "number" ? raw.lastSilenceSeconds : null,
+    aiUsed: raw.aiUsed === true,
+    aiError: String(raw.aiError || ""),
+    aiConfidence: typeof raw.aiConfidence === "number" ? raw.aiConfidence : null,
+    aiReason: String(raw.aiReason || ""),
+    replyConfidence: typeof raw.replyConfidence === "number" ? raw.replyConfidence : null,
+    decisionSource: String(raw.decisionSource || ""),
+    autoPilotDecision: String(raw.autoPilotDecision || ""),
+    lastAutoReplyAt: raw.lastAutoReplyAt ? String(raw.lastAutoReplyAt) : null,
+    createdAt: raw.createdAt ? String(raw.createdAt) : null,
+  };
+}
+
+function normalizeStringList(value: unknown, fallback: string[]) {
+  const next = Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  return next.length > 0 ? next : fallback;
+}
+
+function normalizeInspectorSettings(value: unknown): InspectorSettings {
+  const defaults = createDefaultInspectorSettings();
+  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const ai = raw.ai && typeof raw.ai === "object" ? (raw.ai as Record<string, unknown>) : {};
+  const thresholds =
+    raw.thresholds && typeof raw.thresholds === "object"
+      ? (raw.thresholds as Record<string, unknown>)
+      : {};
+  const preferences =
+    raw.preferences && typeof raw.preferences === "object"
+      ? (raw.preferences as Record<string, unknown>)
+      : {};
+
+  return {
+    ai: {
+      apiKey: String(ai.apiKey || defaults.ai.apiKey),
+      baseUrl: String(ai.baseUrl || defaults.ai.baseUrl),
+      enabled: ai.enabled === true,
+      maxTokens:
+        typeof ai.maxTokens === "number" && Number.isFinite(ai.maxTokens)
+          ? ai.maxTokens
+          : defaults.ai.maxTokens,
+      model: String(ai.model || defaults.ai.model),
+      reasoningEffort:
+        ai.reasoningEffort === "medium" || ai.reasoningEffort === "high"
+          ? ai.reasoningEffort
+          : defaults.ai.reasoningEffort,
+    },
+    allowedReplyTypes: normalizeStringList(raw.allowedReplyTypes, defaults.allowedReplyTypes),
+    autoReplyEnabled: raw.autoReplyEnabled !== false,
+    autopilotMode:
+      raw.autopilotMode === "off" ||
+      raw.autopilotMode === "safe_auto" ||
+      raw.autopilotMode === "full_auto"
+        ? raw.autopilotMode
+        : defaults.autopilotMode,
+    blockedReplyTypes: normalizeStringList(raw.blockedReplyTypes, defaults.blockedReplyTypes),
+    enabled: raw.enabled !== false,
+    highRiskAlwaysManual: raw.highRiskAlwaysManual !== false,
+    inspectionMode:
+      raw.inspectionMode === "hybrid" || raw.inspectionMode === "ai_only"
+        ? raw.inspectionMode
+        : defaults.inspectionMode,
+    preferences: {
+      preferConservative: preferences.preferConservative !== false,
+      preferContinue: preferences.preferContinue !== false,
+      preferNonDestructive: preferences.preferNonDestructive !== false,
+      preferOptionA: preferences.preferOptionA === true,
+    },
+    thresholds: {
+      autoReplyScore:
+        typeof thresholds.autoReplyScore === "number" && Number.isFinite(thresholds.autoReplyScore)
+          ? thresholds.autoReplyScore
+          : defaults.thresholds.autoReplyScore,
+      blockedScore:
+        typeof thresholds.blockedScore === "number" && Number.isFinite(thresholds.blockedScore)
+          ? thresholds.blockedScore
+          : defaults.thresholds.blockedScore,
+      completionScore:
+        typeof thresholds.completionScore === "number" &&
+        Number.isFinite(thresholds.completionScore)
+          ? thresholds.completionScore
+          : defaults.thresholds.completionScore,
+      silenceSeconds:
+        typeof thresholds.silenceSeconds === "number" && Number.isFinite(thresholds.silenceSeconds)
+          ? thresholds.silenceSeconds
+          : defaults.thresholds.silenceSeconds,
+    },
   };
 }
 
@@ -314,6 +484,10 @@ export async function loadMobileSnapshot(signal?: AbortSignal): Promise<MobileSn
       summary: prompt.summary,
       workspacePath: prompt.workspacePath,
       responseMode: prompt.responseMode,
+      type: prompt.type ?? "",
+      replyRiskLevel: prompt.replyRiskLevel ?? "",
+      replyType: prompt.replyType ?? "",
+      replyText: prompt.replyText ?? "",
       createdAt: prompt.createdAt,
     };
   });
@@ -328,6 +502,7 @@ export async function loadMobileSnapshot(signal?: AbortSignal): Promise<MobileSn
       summary: log.summary,
       action: log.action,
       mode: log.mode,
+      workspacePath: log.workspacePath ?? "",
       createdAt: log.createdAt,
     };
   });
@@ -397,10 +572,126 @@ export async function loadEmployeeExtras(workspacePath: string, signal?: AbortSi
   };
 }
 
+export async function loadEmployeeStatus(
+  workspacePath: string,
+  signal?: AbortSignal,
+): Promise<EmployeeLiveStatus | null> {
+  const response = await fetchJson<EmployeeStatusResponse>(
+    "/api/employee/status",
+    {
+      method: "POST",
+      body: JSON.stringify({ workspacePath }),
+    },
+    signal,
+  );
+
+  const status = response.status;
+  if (!status) {
+    return null;
+  }
+
+  const inspector = mapInspectorResult(status.inspector);
+
+  return {
+    runtimeStatus: normalizeRuntimeStatus(status.runtimeStatus),
+    workStatus: normalizeWorkStatus(status.workStatus),
+    currentProject: status.currentProject ?? "未命名项目",
+    currentTask: status.currentTask ?? "等待任务分配",
+    nextAction: status.nextAction ?? "等待新的任务指派",
+    sessionId: status.sessionId ?? null,
+    pid: status.pid ?? null,
+    startedAt: status.startedAt ?? null,
+    stoppedAt: status.stoppedAt ?? null,
+    recoveryPending: Boolean(status.recoveryPending),
+    workspacePath: status.workspacePath ?? workspacePath,
+    resolvedShell: status.resolvedShell ?? null,
+    codexSessionId: typeof status.codexSessionId === "string" ? status.codexSessionId : null,
+    inspector,
+  };
+}
+
+async function loadProjectRoot(signal?: AbortSignal) {
+  const rootInfo = await fetchJson<SettingsRootResponse>("/api/settings/root", undefined, signal);
+  return (rootInfo.projectRoot || DEFAULT_PROJECT_ROOT).trim();
+}
+
+export async function loadInspectorSettings(signal?: AbortSignal) {
+  const projectRoot = await loadProjectRoot(signal);
+  const response = await fetchJson<InspectorSettingsLoadResponse>(
+    "/api/settings/inspector/load",
+    {
+      method: "POST",
+      body: JSON.stringify({ projectRoot }),
+    },
+    signal,
+  );
+
+  return {
+    filePath: String(response.filePath || ""),
+    projectRoot,
+    settings: normalizeInspectorSettings(response.settings),
+  };
+}
+
+export async function saveInspectorSettings(settings: InspectorSettings, signal?: AbortSignal) {
+  const projectRoot = await loadProjectRoot(signal);
+  const response = await fetchJson<InspectorSettingsLoadResponse>(
+    "/api/settings/inspector/save",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectRoot,
+        settings,
+      }),
+    },
+    signal,
+  );
+
+  return {
+    filePath: String(response.filePath || ""),
+    projectRoot,
+    settings: normalizeInspectorSettings(response.settings),
+  };
+}
+
+export async function testInspectorSettings(settings: InspectorSettings, signal?: AbortSignal) {
+  return fetchJson<InspectorTestResult>(
+    "/api/settings/inspector/test",
+    {
+      method: "POST",
+      body: JSON.stringify({ settings }),
+    },
+    signal,
+  );
+}
+
 export async function respondToReview(promptId: string, action: ReviewAction) {
   return fetchJson("/api/runtime/prompts/respond", {
     method: "POST",
     body: JSON.stringify({ promptId, action }),
+  });
+}
+
+export async function runInspectorReview(employee: EmployeeRecord) {
+  const response = await fetchJson<InspectorReviewResponse>("/api/inspector/review", {
+    method: "POST",
+    body: JSON.stringify({
+      memberId: employee.memberId,
+      workspacePath: employee.workspacePath,
+    }),
+  });
+
+  return mapInspectorResult(response.result);
+}
+
+export async function sendInspectorReply(employee: EmployeeRecord, replyText: string) {
+  return fetchJson("/api/inspector/reply", {
+    method: "POST",
+    body: JSON.stringify({
+      memberId: employee.memberId,
+      workspacePath: employee.workspacePath,
+      replyText,
+    }),
   });
 }
 
@@ -492,4 +783,38 @@ export async function switchEmployeeProject(employee: EmployeeRecord, targetWork
       targetWorkspacePath,
     }),
   });
+}
+
+function inferBridgeWebSocketOrigin() {
+  if (BRIDGE_WS_ORIGIN) {
+    return BRIDGE_WS_ORIGIN;
+  }
+
+  if (BRIDGE_HTTP_ORIGIN) {
+    return BRIDGE_HTTP_ORIGIN.replace(/^http/i, "ws");
+  }
+
+  if (typeof window === "undefined") {
+    return "ws://127.0.0.1:4285";
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}`;
+}
+
+export function buildTerminalSocketUrl(input: Pick<EmployeeRecord, "memberId" | "shell" | "workspacePath">) {
+  const params = new URLSearchParams({
+    attachOnly: "1",
+    memberId: input.memberId,
+    shell: input.shell,
+    cwd: input.workspacePath,
+    cols: "120",
+    rows: "32",
+  });
+
+  if (API_KEY) {
+    params.set("token", API_KEY);
+  }
+
+  return `${inferBridgeWebSocketOrigin()}/terminal?${params.toString()}`;
 }

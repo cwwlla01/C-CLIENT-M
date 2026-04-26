@@ -1,4 +1,7 @@
 import {
+  Suspense,
+  lazy,
+  type ReactNode,
   startTransition,
   useDeferredValue,
   useEffect,
@@ -12,9 +15,15 @@ import {
   assignTask,
   controlRuntime,
   loadEmployeeExtras,
+  loadEmployeeStatus,
+  loadInspectorSettings,
   loadMobileSnapshot,
   respondToReview,
+  runInspectorReview,
+  saveInspectorSettings,
+  sendInspectorReply,
   switchEmployeeProject,
+  testInspectorSettings,
 } from "./lib/bridge";
 import { getAuthSession, loginWithPassword } from "./lib/auth";
 import type {
@@ -22,7 +31,9 @@ import type {
   ConnectionState,
   DeliveryRecord,
   DispatchResult,
+  EmployeeLiveStatus,
   EmployeeRecord,
+  InspectorSettings,
   MobileSnapshot,
   NavTab,
   ProjectSpace,
@@ -31,6 +42,7 @@ import type {
   TaskDraft,
   ThemeMode,
 } from "./types";
+import { createDefaultInspectorSettings } from "./types";
 
 type ToastState = {
   tone: "success" | "error" | "info";
@@ -41,6 +53,23 @@ type EmployeeExtrasState = {
   loading: boolean;
   projectSpaces: ProjectSpace[];
   deliveries: DeliveryRecord[];
+  liveStatus: EmployeeLiveStatus | null;
+};
+
+type InspectorSettingsSheetState = {
+  open: boolean;
+  loading: boolean;
+  saving: boolean;
+  testing: boolean;
+  error: string;
+  filePath: string;
+  projectRoot: string;
+  settings: InspectorSettings;
+  testError: string;
+  testLatencyMs: number | null;
+  testMessage: string;
+  testModels: string[];
+  testedUrl: string;
 };
 
 type AuthGateState = AuthSession & {
@@ -141,6 +170,23 @@ function createInitialTaskDraft(employeeId = "", projectName = ""): TaskDraft {
   };
 }
 
+function formatReviewActionLabel(action: ReviewAction) {
+  if (action === "approve") {
+    return "批准";
+  }
+  if (action === "reject") {
+    return "拒绝";
+  }
+  if (action === "dismiss") {
+    return "忽略";
+  }
+  return "继续";
+}
+
+function isInspectorSuggestion(review: ReviewRecord) {
+  return review.type.startsWith("inspector_suggestion:");
+}
+
 function getTimeWindowLabel(value: TaskDraft["timeWindow"]) {
   return timeWindowOptions.find((option) => option.value === value)?.label ?? value;
 }
@@ -158,6 +204,8 @@ function buildRiskMessages(snapshot: MobileSnapshot) {
 }
 
 const APP_TITLE = import.meta.env.VITE_APP_TITLE?.trim() || "C-CLIENT-M";
+const LiveSessionSheet = lazy(() => import("./components/live-session-sheet"));
+const InspectorSettingsSheet = lazy(() => import("./components/inspector-settings-sheet"));
 
 function App() {
   const [theme, setTheme] = useState<ThemeMode>("light");
@@ -174,10 +222,12 @@ function App() {
   const [taskFilter, setTaskFilter] = useState<(typeof taskFilters)[number]["id"]>("all");
   const [reviewView, setReviewView] = useState<"pending" | "logs">("pending");
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [liveSessionEmployeeId, setLiveSessionEmployeeId] = useState<string | null>(null);
   const [employeeExtras, setEmployeeExtras] = useState<EmployeeExtrasState>({
     loading: false,
     projectSpaces: [],
     deliveries: [],
+    liveStatus: null,
   });
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerPopover, setComposerPopover] = useState<ComposerPopoverState>({
@@ -189,6 +239,21 @@ function App() {
   const [taskDraft, setTaskDraft] = useState<TaskDraft>(() => createInitialTaskDraft());
   const [toast, setToast] = useState<ToastState | null>(null);
   const [dispatchResult, setDispatchResult] = useState<DispatchResult | null>(null);
+  const [inspectorSettingsState, setInspectorSettingsState] = useState<InspectorSettingsSheetState>({
+    open: false,
+    loading: false,
+    saving: false,
+    testing: false,
+    error: "",
+    filePath: "",
+    projectRoot: "",
+    settings: createDefaultInspectorSettings(),
+    testError: "",
+    testLatencyMs: null,
+    testMessage: "",
+    testModels: [],
+    testedUrl: "",
+  });
   const [auth, setAuth] = useState<AuthGateState>({
     enabled: false,
     authenticated: false,
@@ -208,6 +273,8 @@ function App() {
   const companyOptions = ["all", ...snapshot.companies];
   const selectedEmployee =
     snapshot.employees.find((employee) => employee.id === selectedEmployeeId) ?? null;
+  const liveSessionEmployee =
+    snapshot.employees.find((employee) => employee.id === liveSessionEmployeeId) ?? null;
   const companyEmployees = snapshot.employees.filter(
     (employee) => selectedCompany === "all" || employee.company === selectedCompany,
   );
@@ -251,7 +318,7 @@ function App() {
     return true;
   });
 
-  const refreshSnapshot = useEffectEvent(async (signal?: AbortSignal) => {
+  async function syncSnapshot(signal?: AbortSignal) {
     setRefreshing(true);
     try {
       const liveSnapshot = await loadMobileSnapshot(signal);
@@ -272,6 +339,10 @@ function App() {
     } finally {
       setRefreshing(false);
     }
+  }
+
+  const refreshSnapshot = useEffectEvent(async (signal?: AbortSignal) => {
+    await syncSnapshot(signal);
   });
 
   const refreshEmployeeExtras = useEffectEvent(async (employee: EmployeeRecord, signal?: AbortSignal) => {
@@ -279,6 +350,7 @@ function App() {
       loading: true,
       projectSpaces: employee.projectSpaces,
       deliveries: employee.deliveries,
+      liveStatus: null,
     });
 
     if (connection.mode !== "live") {
@@ -286,16 +358,21 @@ function App() {
         loading: false,
         projectSpaces: employee.projectSpaces,
         deliveries: employee.deliveries,
+        liveStatus: null,
       });
       return;
     }
 
     try {
-      const extras = await loadEmployeeExtras(employee.workspacePath, signal);
+      const [extras, liveStatus] = await Promise.all([
+        loadEmployeeExtras(employee.workspacePath, signal),
+        loadEmployeeStatus(employee.workspacePath, signal),
+      ]);
       setEmployeeExtras({
         loading: false,
         projectSpaces: extras.projectSpaces.length ? extras.projectSpaces : employee.projectSpaces,
         deliveries: extras.deliveries.length ? extras.deliveries : employee.deliveries,
+        liveStatus,
       });
     } catch {
       if (signal?.aborted) {
@@ -306,6 +383,7 @@ function App() {
         loading: false,
         projectSpaces: employee.projectSpaces,
         deliveries: employee.deliveries,
+        liveStatus: null,
       });
     }
   });
@@ -390,6 +468,12 @@ function App() {
       setSelectedEmployeeId(null);
     }
   }, [selectedCompany, selectedEmployee]);
+
+  useEffect(() => {
+    if (liveSessionEmployeeId && !liveSessionEmployee) {
+      setLiveSessionEmployeeId(null);
+    }
+  }, [liveSessionEmployee, liveSessionEmployeeId]);
 
   useEffect(() => {
     if (!companyMenuOpen) {
@@ -482,6 +566,125 @@ function App() {
 
   function closeEmployeeDetail() {
     setSelectedEmployeeId(null);
+  }
+
+  function openLiveSession(employee: EmployeeRecord) {
+    setSelectedEmployeeId(null);
+    setLiveSessionEmployeeId(employee.id);
+  }
+
+  function closeLiveSession() {
+    setLiveSessionEmployeeId(null);
+  }
+
+  async function openInspectorSettings() {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      open: true,
+      loading: true,
+      error: "",
+      testError: "",
+      testMessage: "",
+    }));
+
+    try {
+      const result = await loadInspectorSettings();
+      setInspectorSettingsState((current) => ({
+        ...current,
+        open: true,
+        loading: false,
+        filePath: result.filePath,
+        projectRoot: result.projectRoot,
+        settings: result.settings,
+      }));
+    } catch (error) {
+      setInspectorSettingsState((current) => ({
+        ...current,
+        open: true,
+        loading: false,
+        error: error instanceof Error ? error.message : "观察者配置加载失败",
+      }));
+    }
+  }
+
+  function closeInspectorSettings() {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      open: false,
+      error: "",
+      testError: "",
+      testMessage: "",
+      testLatencyMs: null,
+      testModels: [],
+      testedUrl: "",
+    }));
+  }
+
+  function handleInspectorSettingsChange(nextSettings: InspectorSettings) {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      settings: nextSettings,
+      error: "",
+      testError: "",
+      testMessage: "",
+    }));
+  }
+
+  async function handleSaveInspectorSettings() {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      saving: true,
+      error: "",
+    }));
+
+    try {
+      const result = await saveInspectorSettings(inspectorSettingsState.settings);
+      setInspectorSettingsState((current) => ({
+        ...current,
+        saving: false,
+        filePath: result.filePath,
+        projectRoot: result.projectRoot,
+        settings: result.settings,
+      }));
+      showToast("观察者配置已保存", "success");
+    } catch (error) {
+      setInspectorSettingsState((current) => ({
+        ...current,
+        saving: false,
+        error: error instanceof Error ? error.message : "观察者配置保存失败",
+      }));
+    }
+  }
+
+  async function handleTestInspectorSettings() {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      testing: true,
+      testError: "",
+      testMessage: "",
+      testLatencyMs: null,
+      testModels: [],
+      testedUrl: "",
+    }));
+
+    try {
+      const result = await testInspectorSettings(inspectorSettingsState.settings);
+      setInspectorSettingsState((current) => ({
+        ...current,
+        testing: false,
+        testMessage: result.message,
+        testLatencyMs: result.latencyMs,
+        testModels: result.models,
+        testedUrl: result.testedUrl,
+      }));
+      showToast("Inspector AI 测试成功", "success");
+    } catch (error) {
+      setInspectorSettingsState((current) => ({
+        ...current,
+        testing: false,
+        testError: error instanceof Error ? error.message : "Inspector AI 测试失败",
+      }));
+    }
   }
 
   function openComposer(target?: EmployeeRecord) {
@@ -585,16 +788,50 @@ function App() {
             company: review.company,
             title: review.title,
             summary: review.summary,
-            action,
-            mode: connection.mode === "live" ? "bridge" : "local-state",
+            action: formatReviewActionLabel(action),
+            mode: isInspectorSuggestion(review) ? "观察者建议" : "人工处理",
+            workspacePath: review.workspacePath,
             createdAt: new Date().toISOString(),
           },
           ...current.reviewLogs,
         ].slice(0, 6),
       }));
+      if (connection.mode === "live") {
+        await syncSnapshot();
+      }
       showToast(`已处理审核消息：${review.title}`, "success");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "审核处理失败", "error");
+    }
+  }
+
+  async function handleRunInspector(employee: EmployeeRecord) {
+    try {
+      await runInspectorReview(employee);
+      await syncSnapshot();
+      const nextStatus = await loadEmployeeStatus(employee.workspacePath);
+      setEmployeeExtras((current) => ({
+        ...current,
+        liveStatus: nextStatus,
+      }));
+      showToast(`已重新检查 ${employee.name}`, "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "重新检查失败", "error");
+    }
+  }
+
+  async function handleSendInspectorReply(employee: EmployeeRecord, replyText: string) {
+    try {
+      await sendInspectorReply(employee, replyText);
+      await syncSnapshot();
+      const nextStatus = await loadEmployeeStatus(employee.workspacePath);
+      setEmployeeExtras((current) => ({
+        ...current,
+        liveStatus: nextStatus,
+      }));
+      showToast(`已把建议回复发给 ${employee.name}`, "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "发送建议失败", "error");
     }
   }
 
@@ -889,6 +1126,17 @@ function App() {
                   title="监督总览"
                   subtitle={`全部公司 · ${activeCount} 运行中`}
                   meta="本地 Supervisor 监督台"
+                  action={
+                    <button
+                      className="utility-icon-button page-heading-action"
+                      type="button"
+                      aria-label="观察者配置"
+                      title="观察者配置"
+                      onClick={() => void openInspectorSettings()}
+                    >
+                      ⚙
+                    </button>
+                  }
                 />
 
                 <div className="service-pill">
@@ -1021,6 +1269,29 @@ function App() {
                     visibleReviews.map((review) => (
                       <article key={review.id} className="review-card">
                         <p className="card-kicker">{review.title}</p>
+                        <div className="review-badge-row">
+                          <span className="status-pill tone-idle">
+                            {isInspectorSuggestion(review) ? "观察者建议" : "CLI 提示"}
+                          </span>
+                          <span className="status-pill tone-busy">{review.responseMode}</span>
+                          {review.replyType ? (
+                            <span className="status-pill tone-busy">{review.replyType}</span>
+                          ) : null}
+                          {review.replyRiskLevel ? (
+                            <span
+                              className={cn(
+                                "status-pill",
+                                review.replyRiskLevel === "low"
+                                  ? "tone-running"
+                                  : review.replyRiskLevel === "medium"
+                                    ? "tone-blocked"
+                                    : "tone-error",
+                              )}
+                            >
+                              风险 {review.replyRiskLevel}
+                            </span>
+                          ) : null}
+                        </div>
                         <p className="card-copy">
                           {review.employeeName}
                           <br />
@@ -1028,16 +1299,52 @@ function App() {
                           <br />
                           {review.summary}
                         </p>
+                        {review.replyText ? (
+                          <div className="review-reply-box">
+                            <p className="card-kicker">建议回复</p>
+                            <p className="card-copy">{review.replyText}</p>
+                          </div>
+                        ) : null}
                         <div className="action-row">
-                          <button className="action-button primary" type="button" onClick={() => handleReviewAction(review, "approve")}>
-                            Approve
-                          </button>
-                          <button className="action-button secondary" type="button" onClick={() => handleReviewAction(review, "reject")}>
-                            Reject
-                          </button>
-                          {review.responseMode === "continue" && (
-                            <button className="action-button success" type="button" onClick={() => handleReviewAction(review, "continue")}>
-                              Continue
+                          {review.responseMode === "approve_reject" && (
+                            <>
+                              <button
+                                className="action-button primary"
+                                type="button"
+                                onClick={() => handleReviewAction(review, "approve")}
+                              >
+                                {isInspectorSuggestion(review) ? "采纳建议" : "批准"}
+                              </button>
+                              <button
+                                className="action-button secondary"
+                                type="button"
+                                onClick={() =>
+                                  handleReviewAction(
+                                    review,
+                                    isInspectorSuggestion(review) ? "dismiss" : "reject",
+                                  )
+                                }
+                              >
+                                {isInspectorSuggestion(review) ? "忽略" : "拒绝"}
+                              </button>
+                            </>
+                          )}
+                          {review.responseMode === "continue_only" && (
+                            <button
+                              className="action-button success"
+                              type="button"
+                              onClick={() => handleReviewAction(review, "continue")}
+                            >
+                              继续
+                            </button>
+                          )}
+                          {review.responseMode === "notify_only" && (
+                            <button
+                              className="action-button secondary"
+                              type="button"
+                              onClick={() => handleReviewAction(review, "dismiss")}
+                            >
+                              已读
                             </button>
                           )}
                         </div>
@@ -1063,6 +1370,12 @@ function App() {
                               {log.summary}
                               <br />
                               {log.mode} · {log.action}
+                              {log.workspacePath ? (
+                                <>
+                                  <br />
+                                  {log.workspacePath}
+                                </>
+                              ) : null}
                             </p>
                           </article>
                         ))}
@@ -1200,7 +1513,177 @@ function App() {
 
               <article className="surface-card">
                 <p className="card-kicker">当前任务</p>
-                <p className="card-copy">{selectedEmployee.currentTask}</p>
+                <p className="card-copy">
+                  {employeeExtras.liveStatus?.currentTask || selectedEmployee.currentTask}
+                </p>
+              </article>
+
+              <article className="surface-card">
+                <p className="card-kicker">运行态</p>
+                <div className="detail-grid">
+                  <div className="detail-grid-item">
+                    <p className="detail-grid-label">本地会话</p>
+                    <p className="detail-grid-value">
+                      {employeeExtras.liveStatus?.sessionId || selectedEmployee.sessionId || "未发现"}
+                    </p>
+                  </div>
+                  <div className="detail-grid-item">
+                    <p className="detail-grid-label">Codex 会话</p>
+                    <p className="detail-grid-value">
+                      {employeeExtras.liveStatus?.codexSessionId || selectedEmployee.codexSessionId || "待发现"}
+                    </p>
+                  </div>
+                  <div className="detail-grid-item">
+                    <p className="detail-grid-label">进程 / Shell</p>
+                    <p className="detail-grid-value">
+                      pid{" "}
+                      {typeof employeeExtras.liveStatus?.pid === "number"
+                        ? employeeExtras.liveStatus.pid
+                        : typeof selectedEmployee.pid === "number"
+                          ? selectedEmployee.pid
+                          : "-"}{" "}
+                      · {employeeExtras.liveStatus?.resolvedShell || selectedEmployee.shell}
+                    </p>
+                  </div>
+                  <div className="detail-grid-item">
+                    <p className="detail-grid-label">下一步</p>
+                    <p className="detail-grid-value">
+                      {employeeExtras.liveStatus?.nextAction || selectedEmployee.nextAction}
+                    </p>
+                  </div>
+                </div>
+              </article>
+
+              <article className="surface-card">
+                <p className="card-kicker">观察结果</p>
+                {employeeExtras.loading ? (
+                  <p className="card-copy subtle-copy">观察者正在读取最近状态...</p>
+                ) : employeeExtras.liveStatus?.inspector ? (
+                  <>
+                    <div className="pill-row">
+                      <StatusPill
+                        label={employeeExtras.liveStatus.inspector.taskState || "unknown"}
+                        tone="idle"
+                      />
+                      <StatusPill
+                        label={employeeExtras.liveStatus.inspector.verdict || "insufficient"}
+                        tone={
+                          employeeExtras.liveStatus.inspector.verdict === "blocked"
+                            ? "blocked"
+                            : employeeExtras.liveStatus.inspector.verdict === "waiting_feedback"
+                              ? "busy"
+                              : "running"
+                        }
+                      />
+                      {typeof employeeExtras.liveStatus.inspector.confidence === "number" ? (
+                        <StatusPill
+                          label={`置信度 ${(employeeExtras.liveStatus.inspector.confidence * 100).toFixed(0)}%`}
+                          tone="idle"
+                        />
+                      ) : null}
+                      {employeeExtras.liveStatus.inspector.replyCandidate?.type ? (
+                        <StatusPill
+                          label={employeeExtras.liveStatus.inspector.replyCandidate.type}
+                          tone="busy"
+                        />
+                      ) : null}
+                      {employeeExtras.liveStatus.inspector.aiUsed ? (
+                        <StatusPill label="AI 兜底" tone="busy" />
+                      ) : null}
+                    </div>
+
+                    <p className="card-copy">
+                      {employeeExtras.liveStatus.inspector.summary || "暂无观察结果摘要"}
+                    </p>
+
+                    {employeeExtras.liveStatus.inspector.ruleMatches.length > 0 ? (
+                      <div className="info-block">
+                        <p className="card-kicker">命中规则</p>
+                        <div className="pill-row">
+                          {employeeExtras.liveStatus.inspector.ruleMatches.map((rule) => (
+                            <StatusPill key={rule} label={rule} tone="idle" />
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {employeeExtras.liveStatus.inspector.risks.length > 0 ? (
+                      <div className="info-block">
+                        <p className="card-kicker">风险</p>
+                        <ul className="detail-list">
+                          {employeeExtras.liveStatus.inspector.risks.map((risk, index) => (
+                            <li key={`${risk}-${index}`}>{risk}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {employeeExtras.liveStatus.inspector.suggestions.length > 0 ? (
+                      <div className="info-block">
+                        <p className="card-kicker">建议</p>
+                        <ul className="detail-list">
+                          {employeeExtras.liveStatus.inspector.suggestions.map((suggestion, index) => (
+                            <li key={`${suggestion}-${index}`}>{suggestion}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {employeeExtras.liveStatus.inspector.targetFiles.length > 0 ? (
+                      <div className="info-block">
+                        <p className="card-kicker">目标文件</p>
+                        <div className="pill-row">
+                          {employeeExtras.liveStatus.inspector.targetFiles.map((target) => {
+                            const matched =
+                              employeeExtras.liveStatus?.inspector?.matchedTargetFiles.includes(target);
+                            return (
+                              <StatusPill
+                                key={target}
+                                label={target}
+                                tone={matched ? "running" : "blocked"}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {employeeExtras.liveStatus.inspector.replyCandidate?.suggestedReply ? (
+                      <div className="info-block">
+                        <p className="card-kicker">建议回复</p>
+                        <p className="card-copy">
+                          {employeeExtras.liveStatus.inspector.replyCandidate.suggestedReply}
+                        </p>
+                      </div>
+                    ) : null}
+
+                    <div className="action-row">
+                      <button
+                        className="action-button secondary"
+                        type="button"
+                        onClick={() => void handleRunInspector(selectedEmployee)}
+                      >
+                        重新检查
+                      </button>
+                      {employeeExtras.liveStatus.inspector.replyCandidate?.suggestedReply ? (
+                        <button
+                          className="action-button primary"
+                          type="button"
+                          onClick={() =>
+                            void handleSendInspectorReply(
+                              selectedEmployee,
+                              employeeExtras.liveStatus?.inspector?.replyCandidate?.suggestedReply || "",
+                            )
+                          }
+                        >
+                          发送建议给员工
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="card-copy subtle-copy">当前还没有观察结果。</p>
+                )}
               </article>
 
               <article className="surface-card">
@@ -1245,6 +1728,27 @@ function App() {
                   ),
                 )}
               </article>
+
+              <article className="surface-card">
+                <p className="card-kicker">实时 CLI</p>
+                <p className="card-copy">
+                  附着到当前员工 CLI，会实时查看输出并直接输入回复。
+                  <br />
+                  {selectedEmployee.runtimeStatus === "running"
+                    ? "当前员工正在运行，可直接进入会话。"
+                    : "当前员工未运行，请先启动或重启 CLI。"}
+                </p>
+                <div className="action-row">
+                  <button
+                    className="action-button secondary"
+                    type="button"
+                    disabled={selectedEmployee.runtimeStatus !== "running"}
+                    onClick={() => openLiveSession(selectedEmployee)}
+                  >
+                    进入实时会话
+                  </button>
+                </div>
+              </article>
             </div>
 
             <div className="sheet-actions">
@@ -1261,6 +1765,50 @@ function App() {
           </aside>
         </div>
       )}
+
+      <Suspense
+        fallback={
+          liveSessionEmployee ? (
+            <div className="overlay" role="presentation">
+              <section className="sheet" aria-label="加载实时会话中">
+                <div className="sheet-scroll">
+                  <article className="surface-card">
+                    <p className="card-kicker">实时 CLI</p>
+                    <p className="card-copy">正在加载终端组件...</p>
+                  </article>
+                </div>
+              </section>
+            </div>
+          ) : null
+        }
+      >
+        {liveSessionEmployee ? (
+          <LiveSessionSheet member={liveSessionEmployee} onClose={closeLiveSession} />
+        ) : null}
+      </Suspense>
+
+      <Suspense fallback={null}>
+        {inspectorSettingsState.open ? (
+          <InspectorSettingsSheet
+            error={inspectorSettingsState.error}
+            filePath={inspectorSettingsState.filePath}
+            loading={inspectorSettingsState.loading}
+            onClose={closeInspectorSettings}
+            onSave={() => void handleSaveInspectorSettings()}
+            onSettingsChange={handleInspectorSettingsChange}
+            onTest={() => void handleTestInspectorSettings()}
+            projectRoot={inspectorSettingsState.projectRoot}
+            saving={inspectorSettingsState.saving}
+            settings={inspectorSettingsState.settings}
+            testError={inspectorSettingsState.testError}
+            testLatencyMs={inspectorSettingsState.testLatencyMs}
+            testMessage={inspectorSettingsState.testMessage}
+            testModels={inspectorSettingsState.testModels}
+            testedUrl={inspectorSettingsState.testedUrl}
+            testing={inspectorSettingsState.testing}
+          />
+        ) : null}
+      </Suspense>
 
       {composerOpen && (
         <div className="overlay" role="presentation" onClick={() => setComposerOpen(false)}>
@@ -1473,16 +2021,20 @@ function App() {
 }
 
 type PageHeadingProps = {
+  action?: ReactNode;
   title: string;
   subtitle: string;
   meta?: string;
 };
 
-function PageHeading({ title, subtitle, meta }: PageHeadingProps) {
+function PageHeading({ title, subtitle, meta, action }: PageHeadingProps) {
   return (
     <header className="page-heading">
       {meta && <p className="page-meta">{meta}</p>}
-      <h1>{title}</h1>
+      <div className="page-heading-row">
+        <h1>{title}</h1>
+        {action}
+      </div>
       <p className="page-subtitle">{subtitle}</p>
     </header>
   );

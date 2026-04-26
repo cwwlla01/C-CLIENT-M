@@ -54,6 +54,8 @@
   当 bridge 开启 API Key 时传入
 - `VITE_BRIDGE_HTTP_ORIGIN`
   可选，仅用于本地 Vite 开发代理或特殊调试场景；生产同源部署时通常留空
+- `VITE_BRIDGE_WS_ORIGIN`
+  可选，CLI 实时会话 WebSocket 入口。自部署同源 `/terminal` 时通常留空；若前端部署在 Vercel 等不便代理 WebSocket 的环境，可显式指定 `wss://...`
 
 运行时变量：
 
@@ -85,6 +87,7 @@ npm run dev
 - `/api/runtime`
 - `/api/employee`
 - `/api/task`
+- `/terminal` WebSocket
 
 ## 构建
 
@@ -198,6 +201,7 @@ docker compose up --build
 - `127.0.0.1:4285` 是 bridge
 - `/api/auth/*` 转给前端服务
 - `/api/*` 和 `/health` 转给 bridge
+- `/terminal` WebSocket 转给 bridge
 
 这样浏览器始终只访问同一个域名，不会出现 `https` 前端直接请求 `http` 后端的 mixed content。
 
@@ -217,6 +221,7 @@ docker compose up --build
 - `/api/auth/*` 由 Vercel Functions 处理密码门禁
 - `/api/*` 由 Vercel Functions 反代到 `BRIDGE_PROXY_TARGET`
 - `/health` 通过 [vercel.json](./vercel.json) rewrite 到 `/api/health`
+- `/terminal` 不经过 Vercel Functions；若要使用实时 CLI，请把 `VITE_BRIDGE_WS_ORIGIN` 指向可访问的 `wss://...` bridge 入口
 
 推荐在 Vercel 项目里配置这些环境变量：
 
@@ -225,6 +230,7 @@ docker compose up --build
 - `VITE_APP_TITLE`
 - `VITE_PROJECT_ROOT`
 - `VITE_CCLIENT_KEY`
+- `VITE_BRIDGE_WS_ORIGIN`
 
 如果你的后端仍然是 `http://...`，Vercel 这套方案也能兼容，因为浏览器访问的是 Vercel 自己的 `https` 域名，请求由服务端函数再转发到后端。
 

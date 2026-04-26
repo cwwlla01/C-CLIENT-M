@@ -27,6 +27,11 @@ function createBridgeProxy(target: string) {
       target,
       changeOrigin: true,
     },
+    "/terminal": {
+      target: target.replace(/^http/i, "ws"),
+      changeOrigin: true,
+      ws: true,
+    },
   };
 }
 
