@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.meta.outputs.image }}
       tag: ${{ steps.meta.outputs.tag }}
 
     steps:
@@ -39,13 +38,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Compute Image Metadata
+      - name: Compute Image Tag
         id: meta
         shell: bash
         run: |
-          IMAGE="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_REPOSITORY}"
           TAG_SHA="${GITHUB_SHA::12}"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build And Push
@@ -54,8 +51,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ steps.meta.outputs.image }}:latest
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_REPOSITORY }}:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_REPOSITORY }}:${{ steps.meta.outputs.tag }}
           build-args: |
             VITE_APP_TITLE=${{ env.VITE_APP_TITLE }}
             VITE_BRIDGE_HTTP_ORIGIN=${{ env.VITE_BRIDGE_HTTP_ORIGIN }}
@@ -76,17 +73,17 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          IMAGE: ${{ needs.docker.outputs.image }}
+          IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
           TAG: ${{ needs.docker.outputs.tag }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT }}
-          script_stop: true
-          envs: APP_LOGIN_PASSWORD,APP_PORT,BRIDGE_PROXY_TARGET,DEPLOY_PATH,DOCKERHUB_TOKEN,DOCKERHUB_USERNAME,IMAGE,TAG
+          envs: APP_LOGIN_PASSWORD,APP_PORT,BRIDGE_PROXY_TARGET,DEPLOY_PATH,DOCKERHUB_TOKEN,DOCKERHUB_USERNAME,IMAGE_REPOSITORY,TAG
           script: |
             set -eu
+            IMAGE="docker.io/${DOCKERHUB_USERNAME}/${IMAGE_REPOSITORY}"
             mkdir -p "$DEPLOY_PATH"
             cat > "$DEPLOY_PATH/compose.yaml" <<EOF
             services:
