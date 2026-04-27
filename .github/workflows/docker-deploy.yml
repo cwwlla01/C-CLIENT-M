@@ -85,6 +85,7 @@ jobs:
             set -eu
             IMAGE="docker.io/${DOCKERHUB_USERNAME}/${IMAGE_REPOSITORY}"
             mkdir -p "$DEPLOY_PATH"
+            rm -f "$DEPLOY_PATH/docker-compose.yml"
             cat > "$DEPLOY_PATH/compose.yaml" <<EOF
             services:
               c-client-m:
@@ -103,6 +104,9 @@ jobs:
             EOF
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             cd "$DEPLOY_PATH"
+            docker compose down --remove-orphans || true
+            docker rm -f c-client-m c-client-m-c-client-m-1 >/dev/null 2>&1 || true
+            docker ps -q --filter "publish=${APP_PORT}" | xargs -r docker rm -f
             docker compose pull
             docker compose up -d
             docker image prune -f
