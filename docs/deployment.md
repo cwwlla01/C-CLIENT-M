@@ -157,6 +157,35 @@ The provided compose file exposes:
 - `4275 -> 80`
 - `host.docker.internal -> host-gateway`
 
+## GitHub Actions Auto Deploy
+
+Repository workflow:
+
+- [../.github/workflows/docker-deploy.yml](../.github/workflows/docker-deploy.yml)
+
+Behavior:
+
+- push `main` or manually trigger workflow
+- build and push Docker Hub image
+- use password SSH to connect server
+- write `compose.yaml` into `DEPLOY_PATH`
+- run `docker compose pull && docker compose up -d`
+
+Required GitHub Secrets:
+
+```text
+DOCKERHUB_USERNAME
+DOCKERHUB_TOKEN
+SSH_HOST
+SSH_PORT
+SSH_USER
+SSH_PASSWORD
+DEPLOY_PATH
+APP_LOGIN_PASSWORD
+BRIDGE_PROXY_TARGET
+VITE_CCLIENT_KEY
+```
+
 ## Vercel
 
 The repository now contains a Vercel-compatible same-origin layer:

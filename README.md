@@ -127,6 +127,7 @@ npm run preview
 仓库已内置 GitHub Actions 工作流：
 
 - `.github/workflows/ci.yml`
+- `.github/workflows/docker-deploy.yml`
 
 默认在 `push main` 和 `pull_request` 时执行：
 
@@ -134,6 +135,27 @@ npm run preview
 npm ci
 npm run build
 ```
+
+`docker-deploy.yml` 会在 `main` 分支 push 或手动触发时执行：
+
+- 构建 Docker 镜像
+- 推送到 Docker Hub
+- 通过密码 SSH 登录服务器
+- 在远端 `DEPLOY_PATH` 写入 `compose.yaml`
+- 执行 `docker compose pull && docker compose up -d`
+
+需要在 GitHub 仓库 Secrets 中提供：
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `SSH_HOST`
+- `SSH_PORT`
+- `SSH_USER`
+- `SSH_PASSWORD`
+- `DEPLOY_PATH`
+- `APP_LOGIN_PASSWORD`
+- `BRIDGE_PROXY_TARGET`
+- `VITE_CCLIENT_KEY`
 
 ## Docker 部署
 
